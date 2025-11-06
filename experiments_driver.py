@@ -12,7 +12,7 @@ import preconditioner as pre
 import setup
 
 
-def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contrast = 1):
+def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, parameters=None, contrast = 1):
     """
     Runs the Multiscale Generalized Finite Element Method (MS-GFEM) for solving elliptic PDEs on a rectangular mesh.
     This function sets up the finite element mesh, defines the problem parameters, assembles the system matrices,
@@ -40,6 +40,8 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
         Label specifying the problem setup (e.g., "source_dirichlet", "iid", "channel", "skyscraper").
     bool_ring : bool
         Flag indicating whether to use the ring method or the original MS-GFEM.
+    parameters: List
+        Free parameters that are passed to the coefficient function.  
     contrast : float, optional
         Contrast parameter for the coefficient field (default is 1).
     Returns
@@ -103,10 +105,15 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.getSetupSquareMiddle(xL, yL, xR, yR, V, contrast)
     elif problem_label == "skyscraper":
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.getSetupSkyscraper(xL, yL, xR, yR, V, contrast)
+    elif problem_label == "Dirichlet_FNO":
+        dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters)
+
     
     # Create FE function for coefficient A, which is a DG0 function
-    coeff_A = Function(functionspace(msh, ("DG", 0)))
+    coeff_A = Function(functionspace(msh, ("DG", 0))) 
     coeff_A.interpolate(coeff_A_function)
+
+    
 
     # helper.plotFunction(coeff_A, msh, "coeff_A_" + problem_label)    # Uncomment to plot the coefficient A
     
@@ -170,7 +177,8 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
         )
 
     # Attach the custom preconditioner
-    pc.setPythonContext(pre.GfemPreconditioner(pc, data))
+    gfem_pre = pre.GfemPreconditioner(pc, data)
+    pc.setPythonContext(gfem_pre)
 
     # Set up the KSP solver
     ksp.setType(PETSc.KSP.Type.RICHARDSON)  # Can also change to GMRES      
@@ -217,3 +225,86 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
     print("Final Residual Norm:", final_residual_norm)
 
     return iterations, gfem_error, coarse_space_size
+
+def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, bool_ring, parameters=None, domain_idx=5,):
+    """
+    Runs the Multiscale Generalized Finite Element Method (MS-GFEM) for solving elliptic PDEs on a rectangular mesh.
+    This function sets up the finite element mesh, defines the problem parameters, and solves the local problems on one specified subdomain
+    Parameters
+    ----------
+    deg : int
+        Polynomial degree of the finite element basis functions.
+    Ny : int
+        Number of coarse mesh elements in the y-direction.
+    ny : int
+        Number of fine mesh elements in the y-direction.
+    ol : int
+        Overlap parameter for local subdomains in the MS-GFEM.
+    os : int
+        Oversampling parameter for local subdomains in the MS-GFEM.
+    nloc : int
+        Number of local eigenvectors used in MS-GFEM per subdomain. Use same number of eigenvector for all subdomains.
+        If rho is not zero, the tolerance rho is used to determine the number of local eigenvectors.
+    rho : float
+        Tolerance for the local eigenvalue problem in MS-GFEM. Not implemented yet!
+    bool_ring : bool
+        Flag indicating whether to use the ring method or the original MS-GFEM.
+    domain_idx : int
+        Index for the subdomain where FNO data is computed, default 5, where an inner domain is taken by assuming 16 square subdomains.
+    parameters: List
+        Free parameters that are passed to the coefficient function.  
+
+    Returns
+    -------
+    coeff_A_FNO : ndarray
+        Coefficient function of PDE discretized on the FEM grid of shape (nx, ny, out_dim).
+    eig_func_2d : ndarray
+        Eigenfunctions of the local eigenvalue problem on the specified subdomain, shape (Nx_sub, Ny_sub, nloc).
+    vals : ndarray
+        Eigenvalues of the local eigenvalue problem on the specified subdomain, shape (nloc,).
+    """
+
+    # Endpoints of mesh
+    xL, yL, xR, yR = 0, 0, 1, 1
+    xy_scaling = np.rint((xR - xL) / (yR - yL))
+
+    # Scaling of the mesh (Would only be needed if we want to change the aspect ratio of the mesh)
+    Nx = np.rint(xy_scaling * Ny).astype(int)
+    nDom = Nx * Ny
+
+    # Number of elements in each direction of the mesh
+    nx = ny * xy_scaling
+    nx = nx.astype(int)
+
+    print("Nx", Nx, "Ny:", Ny, "nx:", nx, "ny:", ny)
+
+    if np.mod(nx, Nx) != 0 or np.mod(ny, Ny) != 0:
+        raise Exception("Finemesh has to be a submesh of coarse mesh")
+
+    # Create mesh consisting of quadrilaterals
+    msh = create_rectangle(
+        comm=MPI.COMM_WORLD,
+        points=((xL, yL), (xR, yR)),
+        n=(nx, ny),
+        cell_type=CellType.quadrilateral,
+    )
+
+    # Test and trial function space
+    V = functionspace(msh, ("Lagrange", deg))
+
+    # Load different problem setups
+    dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters)
+
+
+    # Obtain coordinates of the dofs on the mesh
+    coord_global = V.tabulate_dof_coordinates()
+
+    perturbation_parameter = 0.0
+    coeff_A_FNO, eig_func_2d, vals = msgfem.computeSubdomain((xR, xL, yR, yL, ol, os, Nx, 
+                                                            Ny, nx, ny, nDom, coeff_A_function, deg, nloc,
+                                                            domain_idx, coord_global, dirichlet_boundary, robin_boundary, 
+                                                            perturbation_parameter, rho, bool_ring))
+    
+    return coeff_A_FNO, eig_func_2d, vals
+
+    

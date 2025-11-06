@@ -597,8 +597,31 @@ def computeSubdomain(parameters):
     Eta = diags(eta.vector.array)
     
     # Create local coefficient function for the subdomain
-    coeff_A = Function(functionspace(submesh, ("DG", 0)))
+    element = ('Lagrange', deg)
+    V_coeff = functionspace(submesh, element)
+    coeff_A = Function(V_coeff)
     coeff_A.interpolate(coeff_A_function)
+
+    # create FNO data, the following only works for DG0!!!
+    return_flag = False
+    if i_subdom==5:
+        return_flag = True
+      #  print("Creating FNO data on subdomain ", i_subdom)
+       # if not element == ('DG', 0):
+        #    raise Exception("FNO data creation only implemented for DG0 elements!")
+        A_ = coeff_A.vector.array
+        dof_coord = V_coeff.tabulate_dof_coordinates()
+        # this formula only works when the coefficient is a DG0 function on a rectangular mesh
+        #indices = (dof_coord[:,:-1] - omega_os.x0 - ((np.array(omega_os.x1) - np.array(omega_os.x0))/np.array([2*omega_os.nx, 2*omega_os.ny])) )*(np.array([omega_os.nx, omega_os.ny])/(np.array(omega_os.x1)-np.array(omega_os.x0))) # fenics always thinks in 3D
+        #input_indices = np.round(indices).astype(np.int32)
+        indices = (dof_coord[:,:-1] - omega_os.x0)*np.array([nx, ny]) # fenics always thinks in 3D
+        input_indices = np.round(indices).astype(np.int32)
+        coeff_A_FNO = np.zeros((omega_os.nx+1, omega_os.ny+1))
+
+        for i, idxs in enumerate(input_indices):
+            ix, iy = idxs
+            coeff_A_FNO[ix, iy] = A_[i]
+        
 
     # coeff_A.vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
@@ -723,9 +746,11 @@ def computeSubdomain(parameters):
                 break
     else:
         # Solve eigenproblem 
+        
         vals, vecs = eigsh(MA, k=nloc, M=MB, sigma=0)
         vals = 1/vals
-
+        vals, vecs = helper.sort_eigenpairs(vals, vecs)
+        
     vecs_tmp = np.zeros((Xi.shape[0], vecs.shape[1]))
     vecs_tmp[non_dirichlet_dofs,:] = vecs[:len(non_dirichlet_dofs), :]
 
@@ -757,7 +782,24 @@ def computeSubdomain(parameters):
         # interior dofs is used for the local solves
         interior_dofs = locate_dofs_geometrical(Vs, omega_os.interior)
 
-    return (vecs_tmp, vals, As, Xi, R, non_dirichlet_dofs, interior_dofs)
+    # save local basis functions and eigenvalues and reshape to fit the 2D domain
+    dof_coord = Vs.tabulate_dof_coordinates()
+    indices = (dof_coord[:,:-1] - omega_os.x0)*np.array([nx, ny]) # fenics always thinks in 3D
+    input_indices = np.round(indices).astype(np.int32)
+    eigenfunctions_2d = np.zeros((omega_os.nx+1, omega_os.ny+1, nloc))
+
+    for i, idxs in enumerate(input_indices):
+        ix, iy = idxs
+        eigenfunctions_2d[ix, iy, :] = vecs_tmp[i]
+    
+    #print('storing FNO data')
+    #np.save("../../msgfem_OL/data_local_eig_problems/eig_funcs_2d_dom_%s.npy"%i_subdom, eigenfunctions_2d)
+    #np.save("../../msgfem_OL/data_local_eig_problems/eig_funcs_dom_%s.npy"%i_subdom, vecs_tmp)
+    #np.save("../../msgfem_OL/data_local_eig_problems/eig_vals_dom_%s.npy"%i_subdom, vals)
+    if return_flag:
+        return (coeff_A_FNO, eigenfunctions_2d, vals)
+    else:
+        return (vecs_tmp, vals, As, Xi, R, non_dirichlet_dofs, interior_dofs)
 
 # def gfem_solve(rhs, A_gfem, local_data, nDom, nloc_cut): 
 #     start = time.time()

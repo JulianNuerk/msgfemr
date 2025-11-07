@@ -35,10 +35,10 @@ def getSetupSourceDirichlet(xL, yL, xR, yR, V, msh):
     # Define source term
     f = Function(V)
     x0, y0 = 0.7, 0.9
-    f.interpolate(lambda x: np.exp(-((x[0] - x0)**2 + (x[1] - y0)**2) ))
+    f.interpolate(lambda x: 10 + 0.0001*x[0])#lambda x: np.exp(-((x[0] - x0)**2 + (x[1] - y0)**2) ))
 
     # Coeff in PDE
-    coeff_V_function = lambda x : 1.0 + 0 * x[0]
+    coeff_V_function = lambda x : np.exp(np.sin(10*np.pi*x[0]))*np.exp(np.sin(10*np.pi*x[1]))# highly oszillating
 
     return dirichlet_boundary, robin_boundary, u_D, f, coeff_V_function
 
@@ -313,4 +313,95 @@ def skyscraper(x,y):
         value = 2.0e6
     
     return value
+
+def channel_sub_dom_five(x, parameters):
+    """
+    Channel configuration for subdomain five. Works only for subdomains that come from a regular 4x4 partition of the global domain
+
+    Parameters
+    ----------
+    x : array-like
+        Input coordinates.
+    parameters : array-like
+        Parameters defining the channel position and value 
+    """
+    x0 = 0.234375 # lower right corner of subdomain
+    y1 = 0.515625 # upper left corner
+
+    width_channel = np.abs(y1-x0)/10
+    high_channel = np.abs(y1-x0)/2
+    channel_x0 = parameters[0]
+    channel_y0 = parameters[1]
+
+    on_channel = np.logical_and(np.logical_and( x[0] >= x0 + channel_x0, x[0] <= x0 + channel_x0 + width_channel),
+                                np.logical_and( x[1] >= x0 + channel_y0, x[1] <= x0 + channel_y0 + high_channel))
+    
+    return parameters[2] * on_channel
+
+def channel_smooth(x, parameters, sharpness=100):
+    """
+    Smooth bump function centered at 'parameters[:2]' with height 'parameters[2]'.
+
+    Parameters
+    ----------
+    x : array-like
+        Input coordinates.
+    parameters : array-like
+        Parameters defining the bump center and height.
+    sharpness : float, optional
+        Sharpness of the bump function. Default is 100.
+    """
+    x0 = 0.234375 # lower right corner of subdomain
+    y1 = 0.515625 # upper left corner
+    center = parameters[:2]
+    height = parameters[2]
+
+    w = np.abs(y1-x0)/5
+
+    left = np.array(center) - np.array(w) / 2
+    right = np.array(center) + np.array(w) / 2
+
+    bump_x = 1 / (1 + np.exp(-sharpness * (x[0] - left[0]))) - 1 / (1 + np.exp(-sharpness * (x[0] - right[0])))
+    bump_y = 1 / (1 + np.exp(-sharpness * (x[1] - left[1]))) - 1 / (1 + np.exp(-sharpness * (x[1] - right[1])))
+    return height * bump_x * bump_y
+
+
+def Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters, store_tag):
+        
+        def robin_boundary(x):
+            bool_tmp = np.isclose(x[1], -1)
+            return bool_tmp
+
+        def dirichlet_boundary(x):
+            bool_tmp = np.logical_or(np.isclose(x[0], xL), np.isclose(x[0], xR))
+            bool_tmp = np.logical_or(bool_tmp, np.isclose(x[1], yR))
+            bool_tmp = np.logical_or(bool_tmp, np.isclose(x[1], yL))
+            
+            bool_tmp = np.logical_and(bool_tmp, np.logical_not(robin_boundary(x)))   # Make sure that the point is not on the robin boundary, because we want to have disjoint boundary sets
+            return bool_tmp
+        
+        # Define the Dirichlet boundary condition
+        u_D = Function(V)
+        # Define the Robin boundary condition
+        u_R = Function(V)
+        u_R.interpolate(lambda x: np.full(x.shape[1], 0.0)) 
+
+        # Define source term
+        f = Function(V)
+        x0, y0 = 0.7, 0.9
+        f.interpolate(lambda x: np.exp(-((x[0] - x0)**2 + (x[1] - y0)**2) ))
+        # coeff in PDE
+        if store_tag == 'channel_coeff':
+            coeff_A_function = lambda x : 1 + channel_sub_dom_five(x, parameters)
+        elif store_tag == 'sinus_coeff':
+            coeff_A_function = lambda x : np.exp(np.sin(parameters[0]*np.pi*x[0]) + np.sin(parameters[1]*np.pi*x[1]))# highly oszillating
+        elif store_tag == 'channel_low_coeff':
+            coeff_A_function = lambda x : 1 + channel_sub_dom_five(x, parameters)
+        elif (store_tag == 'channel_smooth_coeff') or (store_tag == 'channel_low_smooth_coeff'):
+            coeff_A_function = lambda x : 1 + channel_smooth(x, parameters)
+        else:
+            raise ValueError('Coefficient function for %s not defined, please implement here...!'%(store_tag))
+        
+
+        return dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function
 

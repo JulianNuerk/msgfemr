@@ -228,9 +228,9 @@ def assembleCoarseSpace(A_gfem, local_data, nloc):
     """
 
     start = time.time()
-    pool = Pool()
-    basis = pool.map(assembleLocalCoarseSpace, [(local_data[i], nloc[i]) for i in range(len(local_data))])
-    pool.close()
+    basis = []
+    for i in range(len(local_data)):
+        basis.append(assembleLocalCoarseSpace([local_data[i], nloc[i]]))
     end = time.time()
     print("time local assembly: ", end-start)
 
@@ -749,7 +749,9 @@ def computeSubdomain(parameters):
         
         vals, vecs = eigsh(MA, k=nloc, M=MB, sigma=0)
         vals = 1/vals
+        vals = np.abs(vals)          # Sometimes get negative eigenvalue corresponding to the zero eigenvalue, so take absolute value for proper ordering
         vals, vecs = helper.sort_eigenpairs(vals, vecs)
+        #vecs, _ = np.linalg.qr(vecs)
         
     vecs_tmp = np.zeros((Xi.shape[0], vecs.shape[1]))
     vecs_tmp[non_dirichlet_dofs,:] = vecs[:len(non_dirichlet_dofs), :]
@@ -796,10 +798,10 @@ def computeSubdomain(parameters):
     #np.save("../../msgfem_OL/data_local_eig_problems/eig_funcs_2d_dom_%s.npy"%i_subdom, eigenfunctions_2d)
     #np.save("../../msgfem_OL/data_local_eig_problems/eig_funcs_dom_%s.npy"%i_subdom, vecs_tmp)
     #np.save("../../msgfem_OL/data_local_eig_problems/eig_vals_dom_%s.npy"%i_subdom, vals)
-    if return_flag:
-        return (coeff_A_FNO, eigenfunctions_2d, vals)
-    else:
-        return (vecs_tmp, vals, As, Xi, R, non_dirichlet_dofs, interior_dofs)
+    #if return_flag:
+        #return (coeff_A_FNO, eigenfunctions_2d, vals)
+    #else:
+    return (vecs_tmp, vals, As, Xi, R, non_dirichlet_dofs, interior_dofs)
 
 # def gfem_solve(rhs, A_gfem, local_data, nDom, nloc_cut): 
 #     start = time.time()

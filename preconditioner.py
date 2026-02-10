@@ -73,13 +73,21 @@ class GfemPreconditioner:
         self.perturbation_parameter = perturbation_parameter
 
         
-
-
+        # debug part 
+       # db_domain = 0
+        #db = msgfem.computeSubdomain((self.xR, self.xL, self.yR, self.yL, self.ol, self.os, self.Nx, 
+         #                               self.Ny, self.nx, self.ny, self.nDom, self.coeff, self.deg, self.nloc,
+          #                              db_domain, self.coord_global, self.dirichlet_boundary, self.robin_boundary, 
+           #                             self.perturbation_parameter, self.rho, self.bool_ring))
+        # debug end
+    
     def setUp(self, pc):
         start = time.time()
 
-        pool = Pool()
-        local_data = pool.map(msgfem.computeSubdomain, [(
+        
+        local_data = []
+        for i_subdom in range(self.nDom):
+            subdom_result = msgfem.computeSubdomain([
                                                         self.xR,
                                                         self.xL,
                                                         self.yR,
@@ -100,12 +108,10 @@ class GfemPreconditioner:
                                                         self.robin_boundary, 
                                                         self.perturbation_parameter,
                                                         self.rho,
-                                                        self.bool_ring
-                                                    ) 
+                                                        self.bool_ring])
+            local_data.append(subdom_result)
                                                     
-                            for i_subdom in range(self.nDom)]
-                    )
-        pool.close()
+                           
 
         nloc_cutoff = np.zeros(self.nDom)
         for i in range(self.nDom):

@@ -10,7 +10,7 @@ import experiments_driver as ed
 
 import ray
 import numpy as np
-# ray.init(num_cpus=1)  # uncomment if want to run serially
+#ray.init(num_cpus=1)  # uncomment if want to run serially
 import helper
 import datetime
 import os as ops
@@ -27,10 +27,10 @@ Ny = 4
 ny = 2**8
 ol = 2
 os = 2
-nlocs = np.arange(1, 11, 1)
+nlocs = [5] # np.arange(1, 11, 1)
 rho = 0.0
-problem_label = "channel" # other options : "source_dirichlet", "iid", "channel",  "skyscraper"
-contrasts = np.array([1, 1000, 1e6])
+problem_label = 'source_dirichlet' # other options : "source_dirichlet", "iid", "channel",  "skyscraper", "Dirichlet_FNO", "crosspoint_1d_coeff"
+contrasts = np.array([10000])
 # length = 1 # length of channels
 
 iteration_numbers = np.zeros((len(nlocs), len(contrasts)))
@@ -51,9 +51,9 @@ for nloc_id in range(len(nlocs)):
         
         iteration_numbers[nloc_id, contrast_id], gfem_errors[nloc_id, contrast_id], coarse_space_size[nloc_id, contrast_id] = ed.run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contrast)
 
-        bool_ring = True
+        #bool_ring = True
 
-        iteration_numbers_ring[nloc_id, contrast_id], gfem_errors_ring[nloc_id, contrast_id], coarse_space_size_ring[nloc_id, contrast_id] = ed.run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contrast)
+        #iteration_numbers_ring[nloc_id, contrast_id], gfem_errors_ring[nloc_id, contrast_id], coarse_space_size_ring[nloc_id, contrast_id] = ed.run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contrast)
 
         # If directory does not exist, create it
         if not ops.path.exists("data_rings"):

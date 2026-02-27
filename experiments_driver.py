@@ -1,5 +1,6 @@
 from mpi4py import MPI
 from petsc4py import PETSc
+import datetime
 
 import numpy as np
 import ufl
@@ -64,6 +65,8 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, paramet
 
     if rho != 0.0:
         raise NotImplementedError("The tolerance rho is not implemented yet!")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
 
     # Endpoints of mesh
     xL, yL, xR, yR = 0, 0, 1, 1
@@ -105,6 +108,8 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, paramet
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.getSetupSquareMiddle(xL, yL, xR, yR, V, contrast)
     elif problem_label == "skyscraper":
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.getSetupSkyscraper(xL, yL, xR, yR, V, contrast)
+    elif problem_label == "crosspoint_1d_coeff":
+        dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.getSetupCrosspoint_1d(xL, yL, xR, yR, V, contrast)
     elif problem_label == "Dirichlet_FNO":
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters)
 
@@ -213,6 +218,12 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, paramet
 
     print("Relative energy error of iterative solution:", helper.compute_errors(u_iterative, uh, msh, coeff_A))
 
+    # plot true FEM function and MSGFEM approximation
+    helper.plotFunction(uG, msh, problem_label + "_u_msgfem_" + timestamp)
+    helper.plotFunction(uh, msh, problem_label + "_u_ref_" + timestamp)
+
+
+
     # Get KSP solver information
     converged_reason = ksp.getConvergedReason()
     iterations = ksp.getIterationNumber()
@@ -226,7 +237,7 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, paramet
 
     return iterations, gfem_error, coarse_space_size
 
-def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, bool_ring, parameters=None, domain_idx=5,):
+def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameters=None, domain_idx=5, bool_ring=False):
     """
     Runs the Multiscale Generalized Finite Element Method (MS-GFEM) for solving elliptic PDEs on a rectangular mesh.
     This function sets up the finite element mesh, defines the problem parameters, and solves the local problems on one specified subdomain
@@ -247,13 +258,14 @@ def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, bool_ring, parameter
         If rho is not zero, the tolerance rho is used to determine the number of local eigenvectors.
     rho : float
         Tolerance for the local eigenvalue problem in MS-GFEM. Not implemented yet!
-    bool_ring : bool
-        Flag indicating whether to use the ring method or the original MS-GFEM.
+    store_tag : str
+        Tag to identify different coefficient functions for storing basis functions.
     domain_idx : int
         Index for the subdomain where FNO data is computed, default 5, where an inner domain is taken by assuming 16 square subdomains.
     parameters: List
         Free parameters that are passed to the coefficient function.  
-
+    bool_ring : bool
+            Flag indicating whether to use the ring method or the original MS-GFEM, default False
     Returns
     -------
     coeff_A_FNO : ndarray
@@ -293,18 +305,18 @@ def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, bool_ring, parameter
     V = functionspace(msh, ("Lagrange", deg))
 
     # Load different problem setups
-    dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters)
+    dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters, store_tag)
 
 
     # Obtain coordinates of the dofs on the mesh
     coord_global = V.tabulate_dof_coordinates()
 
     perturbation_parameter = 0.0
-    coeff_A_FNO, eig_func_2d, vals = msgfem.computeSubdomain((xR, xL, yR, yL, ol, os, Nx, 
+    coeff_A_FNO, eig_func_2d, vecs_tmp, vals, input_indices = msgfem.computeSubdomainFNO((xR, xL, yR, yL, ol, os, Nx, 
                                                             Ny, nx, ny, nDom, coeff_A_function, deg, nloc,
                                                             domain_idx, coord_global, dirichlet_boundary, robin_boundary, 
                                                             perturbation_parameter, rho, bool_ring))
     
-    return coeff_A_FNO, eig_func_2d, vals
+    return coeff_A_FNO, eig_func_2d, vecs_tmp, vals, input_indices
 
     

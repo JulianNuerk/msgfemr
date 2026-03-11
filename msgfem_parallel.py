@@ -1146,7 +1146,7 @@ def computeSubdomainFNO(parameters):
         
     vecs_tmp = np.zeros((Xi.shape[0], vecs.shape[1]))
     vecs_tmp[non_dirichlet_dofs,:] = vecs[:len(non_dirichlet_dofs), :]
-    vecs_tmp, _ = np.linalg.qr(vecs_tmp) # orthogonalize in standard scalar product (this does not brake msgfem)
+    vecs_tmp, _ = np.linalg.qr(vecs_tmp) # orthogonalize in standard scalar product (this does not affect msgfem)
 
     if bool_ring:
         # Extend a-harmonically to the interior

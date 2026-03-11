@@ -219,6 +219,59 @@ def getSetupSquareMiddle(xL, yL, xR, yR, V, contrast):
 
     return dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function
 
+# Standalone functions
+def crosspoint_1d(x):
+    """
+    Compute same-side indicator for thresholds (0.4, 0.35).
+    Accepts x as shape (2, num_points) or [X, Y] where X, Y are arrays.
+    Returns an array of ±1 with zeros mapped to -1 (for arrays),
+    or a scalar ±1 for scalar inputs.
+    """
+    cond = ((x[0] < 0.4) & (x[1] < 0.35)) | ((x[0] > 0.4) & (x[1] > 0.35))
+    same_side = cond.astype(int)
+    same_side[same_side == 0] = -1
+    return same_side
+
+def crosspoint_1d_coeff_msgfem(x, contrast):
+    """
+    y can be a scalar or a NumPy array.
+    Returns 1 + ((contrast - 1)/(contrast + 1)) * y * crosspoint_1d(x1, x2)
+    """
+    value = 1 + (contrast - 1)/(contrast + 1)*crosspoint_1d(x)
+    return value 
+
+def getSetupCrosspoint_1d(xL, yL, xR, yR, V, contrast):
+    # Only consider homogeneous dirichlet BC
+    def robin_boundary(x):
+        bool_tmp = np.isclose(x[1], -1)
+        return bool_tmp
+
+    def dirichlet_boundary(x):
+        bool_tmp = np.logical_or(np.isclose(x[0], xL), np.isclose(x[0], xR))
+        bool_tmp = np.logical_or(bool_tmp, np.isclose(x[1], yR))
+        bool_tmp = np.logical_or(bool_tmp, np.isclose(x[1], yL))
+        
+        bool_tmp = np.logical_and(bool_tmp, np.logical_not(robin_boundary(x)))   # Make sure that the point is not on the robin boundary, because we want to have disjoint boundary sets
+        return bool_tmp
+    
+    # Define the Dirichlet boundary condition
+    u_D = Function(V)
+    u_D.interpolate(lambda x: np.full(x.shape[1], 0.0)) # Only implemented for homogeneous dirichlet BC
+
+    # Define the Robin boundary condition
+    u_R = Function(V)
+    u_R.interpolate(lambda x: np.full(x.shape[1], 0.0)) 
+
+    # Define source term
+    f = Function(V)
+    x0, y0 = 0.5, 0.5
+    f.interpolate(lambda x: np.full(x.shape[1], 1.0))
+
+    # Coeff in PDE
+    coeff_A_function = lambda x : crosspoint_1d_coeff_msgfem(x, contrast)
+
+    return dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function
+
 def square_middle(x,y):
     # Check whether the point (x,y) is in the square with midpoint (0.5, 0.5), length 0.1, and width 0.1.
     return np.logical_and(np.abs(x - 0.5) < 0.05 +1e-6, np.abs(y - 0.5) < 0.05 +1e-6)
@@ -365,8 +418,74 @@ def channel_smooth(x, parameters, sharpness=100):
     bump_y = 1 / (1 + np.exp(-sharpness * (x[1] - left[1]))) - 1 / (1 + np.exp(-sharpness * (x[1] - right[1])))
     return height * bump_x * bump_y
 
+# Standalone functions
+def crosspoint_1d(x):
+    """
+    Compute same-side indicator for thresholds (0.4, 0.35).
+    Accepts x as shape (2, num_points) or [X, Y] where X, Y are arrays.
+    Returns an array of ±1 with zeros mapped to -1 (for arrays),
+    or a scalar ±1 for scalar inputs.
+    """
+    cond = ((x[0] < 0.4) & (x[1] < 0.35)) | ((x[0] > 0.4) & (x[1] > 0.35))
+    same_side = cond.astype(int)
+    same_side[same_side == 0] = -1
+    return same_side
 
-def Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters, store_tag):
+def crosspoint_1d_coeff(x, parameters):
+    """
+    y can be a scalar or a NumPy array.
+    Returns 1 + ((contrast - 1)/(contrast + 1)) * y * crosspoint_1d(x1, x2)
+    """
+    y = parameters[0]
+    contrast = parameters[1]
+    value = 1 + (contrast - 1)/(contrast + 1)*y*crosspoint_1d(x)
+    return value 
+
+# random lines
+def random_lines(x, p):
+    """
+    Coefficient function A(x, p) that creates a piecewise-constant field
+    with high-conductivity random lines on a low background.
+
+    Parameters
+    ----------
+    x : np.ndarray, shape (2, num_gridpoints)
+        Spatial coordinates; x[0] = x-coords, x[1] = y-coords.
+    p : np.ndarray, shape (num_lines * 4,)
+        Parameter vector.  For each line i the 4 entries are:
+            p[4*i]     – centre x  (cx)
+            p[4*i + 1] – centre y  (cy)
+            p[4*i + 2] – half-length of the line
+            p[4*i + 3] – rotation angle theta (rad)
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        Coefficient values (0.01 background, 100.0 on lines).
+    """
+    num_lines = len(p) // 4
+    z = np.full(x.shape[1], 0.01)
+
+    half_width = 0.01  # fixed half-width as in the original code
+
+    for i in range(num_lines):
+        cx          = p[4 * i]
+        cy          = p[4 * i + 1]
+        half_length = p[4 * i + 2]
+        theta       = p[4 * i + 3]
+
+        dx = x[0] - cx
+        dy = x[1] - cy
+
+        local_x =  dx * np.cos(theta) + dy * np.sin(theta)
+        local_y = -dx * np.sin(theta) + dy * np.cos(theta)
+
+        mask = (np.abs(local_x) <= half_length) & (np.abs(local_y) <= half_width)
+        z[mask] = 100.0
+
+    return z
+
+def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
         
         def robin_boundary(x):
             bool_tmp = np.isclose(x[1], -1)
@@ -399,9 +518,40 @@ def Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters, store_tag):
             coeff_A_function = lambda x : 1 + channel_sub_dom_five(x, parameters)
         elif (store_tag == 'channel_smooth_coeff') or (store_tag == 'channel_low_smooth_coeff'):
             coeff_A_function = lambda x : 1 + channel_smooth(x, parameters)
+        elif store_tag == 'crosspoint_1d_coeff':
+            coeff_A_function = lambda x : crosspoint_1d_coeff(x, parameters)
+        elif store_tag == 'random_lines':
+            coeff_A_function = lambda x : random_lines(x, parameters)
         else:
             raise ValueError('Coefficient function for %s not defined, please implement here...!'%(store_tag))
         
 
         return dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function
 
+def random_lines_msgfem(xL, yL, xR, yR, V, msh, parameters):
+        
+        def robin_boundary(x):
+            bool_tmp = np.isclose(x[1], -1)
+            return bool_tmp
+
+        def dirichlet_boundary(x):
+            bool_tmp = np.logical_or(np.isclose(x[0], xL), np.isclose(x[0], xR))
+            bool_tmp = np.logical_or(bool_tmp, np.isclose(x[1], yR))
+            bool_tmp = np.logical_or(bool_tmp, np.isclose(x[1], yL))
+            
+            bool_tmp = np.logical_and(bool_tmp, np.logical_not(robin_boundary(x)))   # Make sure that the point is not on the robin boundary, because we want to have disjoint boundary sets
+            return bool_tmp
+        
+        # Define the Dirichlet boundary condition
+        u_D = Function(V)
+        # Define the Robin boundary condition
+        u_R = Function(V)
+        u_R.interpolate(lambda x: np.full(x.shape[1], 0.0)) 
+
+        # Define source term
+        f = Function(V)
+        x0, y0 = 0.7, 0.9
+        f.interpolate(lambda x: np.exp(-((x[0] - x0)**2 + (x[1] - y0)**2) ))
+        coeff_A_function = lambda x : random_lines(x, parameters)
+
+        return dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function

@@ -13,7 +13,7 @@ import preconditioner as pre
 import setup
 
 
-def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, parameters=None, contrast = 1):
+def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contrast = 1):
     """
     Runs the Multiscale Generalized Finite Element Method (MS-GFEM) for solving elliptic PDEs on a rectangular mesh.
     This function sets up the finite element mesh, defines the problem parameters, assembles the system matrices,
@@ -40,9 +40,7 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, paramet
     problem_label : str
         Label specifying the problem setup (e.g., "source_dirichlet", "iid", "channel", "skyscraper").
     bool_ring : bool
-        Flag indicating whether to use the ring method or the original MS-GFEM.
-    parameters: List
-        Free parameters that are passed to the coefficient function.  
+        Flag indicating whether to use the ring method or the original MS-GFEM.  
     contrast : float, optional
         Contrast parameter for the coefficient field (default is 1).
     Returns
@@ -110,8 +108,15 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, paramet
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.getSetupSkyscraper(xL, yL, xR, yR, V, contrast)
     elif problem_label == "crosspoint_1d_coeff":
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.getSetupCrosspoint_1d(xL, yL, xR, yR, V, contrast)
-    elif problem_label == "Dirichlet_FNO":
-        dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters)
+    elif problem_label == "random_lines":
+        print('Random parameters are drawn inside of experiment_driver for this case !!!')
+        num_lines = 10
+        centers = np.random.uniform(0.1, 0.9, (num_lines, 2))  # (num_samples, 10, 2)
+        lengths = np.random.uniform(0.05, 0.4, (num_lines, 1)) # (num_samples, 10, 1)
+        angles  = np.random.uniform(0, np.pi, (num_lines, 1))  # (num_samples, 10, 1)
+        parameters = np.column_stack([centers, lengths, angles]).ravel()
+        dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.random_lines_msgfem(xL, yL, xR, yR, V, msh, parameters)
+
 
     
     # Create FE function for coefficient A, which is a DG0 function
@@ -305,7 +310,7 @@ def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameter
     V = functionspace(msh, ("Lagrange", deg))
 
     # Load different problem setups
-    dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.Dirichlet_FNO(xL, yL, xR, yR, V, msh, parameters, store_tag)
+    dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag)
 
 
     # Obtain coordinates of the dofs on the mesh

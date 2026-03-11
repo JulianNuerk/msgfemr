@@ -27,9 +27,9 @@ Ny = 4
 ny = 2**8
 ol = 2
 os = 2
-nlocs = [5] # np.arange(1, 11, 1)
+nlocs = [10] # np.arange(1, 11, 1)
 rho = 0.0
-problem_label = 'source_dirichlet' # other options : "source_dirichlet", "iid", "channel",  "skyscraper", "Dirichlet_FNO", "crosspoint_1d_coeff"
+problem_label = 'random_lines' # other options : "source_dirichlet", "iid", "channel",  "skyscraper", "Dirichlet_FNO", "crosspoint_1d_coeff, random_lines"
 contrasts = np.array([10000])
 # length = 1 # length of channels
 
@@ -48,7 +48,6 @@ for nloc_id in range(len(nlocs)):
         print(f"nloc: {nloc}, contrast: {contrast}")
 
         bool_ring = False
-        
         iteration_numbers[nloc_id, contrast_id], gfem_errors[nloc_id, contrast_id], coarse_space_size[nloc_id, contrast_id] = ed.run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contrast)
 
         #bool_ring = True

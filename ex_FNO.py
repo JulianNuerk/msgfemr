@@ -23,11 +23,11 @@ Ny = 4
 ny = 2**8
 ol = 2
 os = 2
-nloc = 10
+nloc = 4
 rho = 0.0
 subdom_idx = 5
-store_tag = 'crosspoint_1d_coeff' # channel_smooth_coeff, sinus_coeff, channel_coeff, crosspoint_1d_coeff
-num_samples = 300
+store_tag = 'random_lines' # channel_smooth_coeff, sinus_coeff, channel_coeff, crosspoint_1d_coeff
+num_samples = 7
 
 # parameters not to play with 
 x0 = 0.234375 # lower right corner of subdomain
@@ -56,6 +56,13 @@ elif store_tag == 'crosspoint_1d_coeff':
     contrast = 10000
     parameters = contrast*np.ones((num_samples, 2))
     parameters[:,0] = np.linspace(-1,1,num_samples)
+elif store_tag == 'random_lines':
+    num_lines = 10
+    centers = np.random.uniform(0.1, 0.9, (num_samples, num_lines, 2))  # (num_samples, 10, 2)
+    lengths = np.random.uniform(0.05, 0.4, (num_samples, num_lines, 1)) # (num_samples, 10, 1)
+    angles  = np.random.uniform(0, np.pi, (num_samples, num_lines, 1))  # (num_samples, 10, 1)
+    parameters = np.concatenate([centers, lengths, angles], axis=2).reshape(num_samples, num_lines * 4)  # (num_samples, 40)
+
 else:
     raise ValueError('store_tag %s not defined!'%(store_tag))
 

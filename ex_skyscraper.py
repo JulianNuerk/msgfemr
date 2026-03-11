@@ -83,7 +83,7 @@ iteration_numbers_rings = data["iteration_numbers_ring"].astype(int).T
 gfem_errors_rings = data["gfem_errors_ring"]
 
 # Get the colormap
-colors = ["#0072BD", "#D95319", "#7E2F8E", "#77AC30", "#4DBEEE", "#A2142F", "#77AC30", "#4DBEEE", "#A2142F"]
+colors = ["#0072BD", "#D95319", "#9746A7", "#77AC30", "#4DBEEE", "#A2142F", "#77AC30", "#4DBEEE", "#A2142F"]
 
 # Create a figure and axis with appropriate size for readability
 plt.figure(figsize=(8, 6))

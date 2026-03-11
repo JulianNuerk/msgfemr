@@ -933,11 +933,6 @@ def computeSubdomainFNO(parameters):
             nx,
             ny
     )  
-    # Create rings 
-    ring = Ring(omega_min, omega)             #  This is the overlap region of the current subdomain with other subdomains
-    ring_os = Ring(omega_os_min, omega_os)    # The oversampling ring R^*
-    ring_eta = Ring(omega_eta, omega_min)     # The additional layer of the ring, where the cut- off function eta is defined.
-                                              # With the notation in the paper, we have R = ring \cup \ring_eta
 
     # Build a submesh for the oversampling domain
     submesh = create_rectangle(
@@ -995,7 +990,6 @@ def computeSubdomainFNO(parameters):
     eta = Function(Vs)
     eta.vector.array[:] = 1
     eta.vector.array[locate_dofs_geometrical(Vs, omega_eta.inside)] = 0
-    Eta = diags(eta.vector.array)
     
     # Create local coefficient function for the subdomain
     element = ('Lagrange', deg)
@@ -1018,8 +1012,6 @@ def computeSubdomainFNO(parameters):
         
     # Define indicator function for oversampling ring, ring, ring_eta
     chi_ring_os = Function(functionspace(submesh, ("DG", 0)))
-    chi_ring = Function(functionspace(submesh, ("DG", 0)))
-    chi_ring_eta = Function(functionspace(submesh, ("DG", 0)))
     chi_ring_os.interpolate(lambda x: 1 + 0 * x[0])
 
     # Assemble local stiffness matrix for eigenvalue problem 
@@ -1029,7 +1021,6 @@ def computeSubdomainFNO(parameters):
     u, v = TrialFunction(Vs), TestFunction(Vs)
     a = inner(chi_ring_os * coeff_A * grad(u), grad(v)) * dx
     A_constraint = assemble_matrix(form(a)).to_scipy()
-    As = assemble_matrix(form(a)).to_scipy() 
     
     # Prepare matrix for local eigenproblem, corresponding to 
     # chosen scalar product. 
@@ -1113,7 +1104,6 @@ def computeSubdomainFNO(parameters):
                 break
     else:
         # Solve eigenproblem 
-        
         vals, vecs = eigsh(MA, k=nloc, M=MB, sigma=0)
         vals = 1/vals
         vals = np.abs(vals)          # Sometimes get negative eigenvalue corresponding to the zero eigenvalue, so take absolute value for proper ordering

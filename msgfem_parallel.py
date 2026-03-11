@@ -786,7 +786,6 @@ def computeSubdomainFNO(parameters):
         - Boundary locator functions (dirichlet_boundary, robin_boundary)
         - Perturbation parameter (perturbation_parameter)
         - Eigenvalue cutoff (rho)
-        - Ring localization flag (bool_ring)
     Returns
     -------
     tuple
@@ -802,7 +801,7 @@ def computeSubdomainFNO(parameters):
     """
 
 
-    (xR,xL,yR,yL,ol,os,Nx,Ny,nx,ny,nDom,coeff_A_function,deg,nloc,i_subdom,coord_global, dirichlet_boundary, robin_boundary, perturbation_parameter, rho, bool_ring) = parameters
+    (xR,xL,yR,yL,ol,os,Nx,Ny,nx,ny,nDom,coeff_A_function,deg,nloc,i_subdom,coord_global, dirichlet_boundary, robin_boundary, perturbation_parameter, rho) = parameters
 
     d_x = xR - xL
     d_y = yR - yL
@@ -1021,16 +1020,7 @@ def computeSubdomainFNO(parameters):
     chi_ring_os = Function(functionspace(submesh, ("DG", 0)))
     chi_ring = Function(functionspace(submesh, ("DG", 0)))
     chi_ring_eta = Function(functionspace(submesh, ("DG", 0)))
-
-    if bool_ring:  
-        chi_ring_os.interpolate(lambda x: ring_os.inside(x))
-
-        chi_ring.interpolate(lambda x: ring.inside(x))
-
-        chi_ring_eta.interpolate(lambda x: ring_eta.inside(x))
-
-    else:
-        chi_ring_os.interpolate(lambda x: 1 + 0 * x[0])
+    chi_ring_os.interpolate(lambda x: 1 + 0 * x[0])
 
     # Assemble local stiffness matrix for eigenvalue problem 
     # If the ring method is used, we only assemble over the 
@@ -1048,26 +1038,17 @@ def computeSubdomainFNO(parameters):
     A_plus = assemble_matrix(form(a_plus)).to_scipy()
 
     # Dofs on oversampling ring or oversampling domain
-    if bool_ring:
-        all_dofs = locate_dofs_geometrical(Vs, ring_os.inside)
-    else:
-        all_dofs = np.arange(Vs.dofmap.index_map.size_global)
+    all_dofs = np.arange(Vs.dofmap.index_map.size_global)
 
     dirichlet_dofs = np.intersect1d(all_dofs, locate_dofs_geometrical(Vs, dirichlet_boundary))
     robin_dofs = np.intersect1d(all_dofs, locate_dofs_geometrical(Vs, robin_boundary))         # Artefact of tests with Helmholtz, will be empty
     non_dirichlet_dofs = np.setdiff1d(all_dofs, dirichlet_dofs)
 
-    
-    if bool_ring:
-        # Locate interior dofs
-        interior_dofs = locate_dofs_geometrical(Vs, ring_os.interior)     
-        # Locate interior bdry dofs
-        interior_bdry_dofs = locate_dofs_geometrical(Vs, ring_os.on_interior_boundary)
-    else:
-        # Locate interior dofs
-        interior_dofs = locate_dofs_geometrical(Vs, omega_os.interior)     
-        # Locate interior bdry dofs
-        interior_bdry_dofs = locate_dofs_geometrical(Vs, omega_os.on_interior_boundary)
+
+    # Locate interior dofs
+    interior_dofs = locate_dofs_geometrical(Vs, omega_os.interior)     
+    # Locate interior bdry dofs
+    interior_bdry_dofs = locate_dofs_geometrical(Vs, omega_os.on_interior_boundary)
     
     interior_and_robin_bdry_dofs = np.union1d(interior_dofs, robin_dofs)
     interior_bdry_and_robin_bdry_dofs = np.union1d(interior_bdry_dofs, robin_dofs)
@@ -1086,14 +1067,8 @@ def computeSubdomainFNO(parameters):
                 ],
             ]
         )
-    # Create rhs matrix for the local eigenproblem
-    if bool_ring:
-        a_ring = inner((chi_ring + chi_ring_eta) * coeff_A * grad(u), grad(v)) * dx
-        A_ring = assemble_matrix(form(a_ring)).to_scipy()
-        A_omega_xi = (Eta.dot(Xi)).T.dot(A_ring.dot(Eta.dot(Xi)))
     
-    else:
-        A_omega_xi = Xi.T.dot(A_plus.dot(Xi))
+    A_omega_xi = Xi.T.dot(A_plus.dot(Xi))
 
     MB = bmat(
             [
@@ -1147,34 +1122,6 @@ def computeSubdomainFNO(parameters):
     vecs_tmp = np.zeros((Xi.shape[0], vecs.shape[1]))
     vecs_tmp[non_dirichlet_dofs,:] = vecs[:len(non_dirichlet_dofs), :]
     vecs_tmp, _ = np.linalg.qr(vecs_tmp) # orthogonalize in standard scalar product (this does not affect msgfem)
-
-    if bool_ring:
-        # Extend a-harmonically to the interior
-        
-        # Assemble matrix over ommin
-        chi_ommin = Function(functionspace(submesh, ("DG", 0)))
-        chi_ommin.interpolate(lambda x: omega_min.inside(x))
-        u, v = TrialFunction(Vs), TestFunction(Vs)
-        a = inner(chi_ommin * coeff_A * grad(u), grad(v)) * dx
-        A_ommin = assemble_matrix(form(a)).to_scipy() 
-
-        # Locate interior dofs of ommin
-        ommin_interior_dofs = locate_dofs_geometrical(Vs, omega_min.interior)
-
-        # Harmonically extend
-        u_g = vecs_tmp
-        u_0 = spsolve(A_ommin[ommin_interior_dofs,:][:,ommin_interior_dofs], - A_ommin.dot(u_g)[ommin_interior_dofs])
-        if nloc > 1:
-            vecs_tmp[ommin_interior_dofs, :] = u_g[ommin_interior_dofs, :] + u_0
-        else:
-            vecs_tmp[ommin_interior_dofs,0] = u_g[ommin_interior_dofs,0] + u_0
-
-        # assemble matrix for local solves, which will be return of this function
-        a = inner(coeff_A * grad(u), grad(v)) * dx
-        As = assemble_matrix(form(a)).to_scipy() 
-
-        # interior dofs is used for the local solves
-        interior_dofs = locate_dofs_geometrical(Vs, omega_os.interior)
 
     # save local basis functions and eigenvalues and reshape to fit the 2D domain
     dof_coord = Vs.tabulate_dof_coordinates()

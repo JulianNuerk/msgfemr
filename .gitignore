@@ -6,7 +6,5 @@ tables/
 out_functions/
 __pycache__/
 settings.json
-test_stuff.ipynb
-LICENSE
 requirements.yaml
 

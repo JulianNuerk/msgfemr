@@ -23,11 +23,11 @@ Ny = 4
 ny = 2**8
 ol = 2
 os = 2
-nloc = 4
+nloc = 5
 rho = 0.0
 subdom_idx = 5
 store_tag = 'random_lines' # channel_smooth_coeff, sinus_coeff, channel_coeff, crosspoint_1d_coeff
-num_samples = 7
+num_samples = 1200
 
 # parameters not to play with 
 x0 = 0.234375 # lower right corner of subdomain
@@ -62,7 +62,6 @@ elif store_tag == 'random_lines':
     lengths = np.random.uniform(0.05, 0.4, (num_samples, num_lines, 1)) # (num_samples, 10, 1)
     angles  = np.random.uniform(0, np.pi, (num_samples, num_lines, 1))  # (num_samples, 10, 1)
     parameters = np.concatenate([centers, lengths, angles], axis=2).reshape(num_samples, num_lines * 4)  # (num_samples, 40)
-
 else:
     raise ValueError('store_tag %s not defined!'%(store_tag))
 
@@ -81,7 +80,7 @@ for idx, parameter in enumerate(parameters):
     np.save(ops.path.join(path_, "coeff_A_sub_dom_%s_sample_%s.npy"%(subdom_idx, idx)), coeff_A_FNO)
     np.save(ops.path.join(path_, "eig_vals_sub_dom_%s_sample_%s.npy"%(subdom_idx, idx)), eig_vals)
     np.save(ops.path.join(path_, "vecs_tmp_sub_dom_%s_sample_%s.npy"%(subdom_idx, idx)), vecs_tmp)
-    np.save(ops.path.join(path_, "indices_for_reshape_2d_%s.npy"%subdom_idx), input_indices)
+    np.save(ops.path.join(path_, "indices_for_reshape_2d_sub_dom_%s.npy"%subdom_idx), input_indices)
 
 
 if store_tag == "crosspoint_1d_coeff":

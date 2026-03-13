@@ -110,7 +110,7 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.getSetupCrosspoint_1d(xL, yL, xR, yR, V, contrast)
     elif problem_label == "random_lines":
         print('Random parameters are drawn inside of experiment_driver for this case !!!')
-        num_lines = 10
+        num_lines = 20
         centers = np.random.uniform(0.1, 0.9, (num_lines, 2))  # (num_samples, 10, 2)
         lengths = np.random.uniform(0.05, 0.4, (num_lines, 1)) # (num_samples, 10, 1)
         angles  = np.random.uniform(0, np.pi, (num_lines, 1))  # (num_samples, 10, 1)
@@ -191,7 +191,7 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
     pc.setPythonContext(gfem_pre)
 
     # Set up the KSP solver
-    ksp.setType(PETSc.KSP.Type.RICHARDSON)  # Can also change to GMRES      
+    ksp.setType(PETSc.KSP.Type.GMRES)  # Can also change to GMRES      
     ksp.setTolerances(rtol=1e-8, max_it = 1000)
 
     # ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED) # uncomment to switch to unpreconditioned norm (then right-preconditioning is used!)
@@ -225,6 +225,7 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
 
     # plot true FEM function and MSGFEM approximation
     helper.plotFunction(uG, msh, problem_label + "_u_msgfem_" + timestamp)
+    helper.plotFunction(u_iterative, msh, problem_label + "_u_iterative_" + timestamp)
     helper.plotFunction(uh, msh, problem_label + "_u_ref_" + timestamp)
 
 
@@ -242,7 +243,7 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
 
     return iterations, gfem_error, coarse_space_size
 
-def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameters=None, domain_idx=5, bool_ring=False):
+def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameters=None, domain_idx=5):
     """
     Runs the Multiscale Generalized Finite Element Method (MS-GFEM) for solving elliptic PDEs on a rectangular mesh.
     This function sets up the finite element mesh, defines the problem parameters, and solves the local problems on one specified subdomain
@@ -269,8 +270,6 @@ def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameter
         Index for the subdomain where FNO data is computed, default 5, where an inner domain is taken by assuming 16 square subdomains.
     parameters: List
         Free parameters that are passed to the coefficient function.  
-    bool_ring : bool
-            Flag indicating whether to use the ring method or the original MS-GFEM, default False
     Returns
     -------
     coeff_A_FNO : ndarray
@@ -320,7 +319,7 @@ def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameter
     coeff_A_FNO, eig_func_2d, vecs_tmp, vals, input_indices = msgfem.computeSubdomainFNO((xR, xL, yR, yL, ol, os, Nx, 
                                                             Ny, nx, ny, nDom, coeff_A_function, deg, nloc,
                                                             domain_idx, coord_global, dirichlet_boundary, robin_boundary, 
-                                                            perturbation_parameter, rho, bool_ring))
+                                                            perturbation_parameter, rho))
     
     return coeff_A_FNO, eig_func_2d, vecs_tmp, vals, input_indices
 

@@ -11,6 +11,8 @@ import helper
 import datetime
 import os as ops
 
+from KL_expansion import discretize_covariance_2d, solve_eigenvalue_problem, kl_expansion
+
 # Generate a timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 np.random.seed(42)
@@ -23,11 +25,11 @@ Ny = 4
 ny = 2**8
 ol = 2
 os = 2
-nloc = 5
+nloc = 4
 rho = 0.0
 subdom_idx = 5
-store_tag = 'random_lines' # channel_smooth_coeff, sinus_coeff, channel_coeff, crosspoint_1d_coeff
-num_samples = 1200
+store_tag = 'kl_coeff' # channel_smooth_coeff, sinus_coeff, channel_coeff, crosspoint_1d_coeff
+num_samples = 12
 
 # parameters not to play with 
 x0 = 0.234375 # lower right corner of subdomain
@@ -55,14 +57,42 @@ elif store_tag == 'channel_low_smooth_coeff':
 elif store_tag == 'crosspoint_1d_coeff':
     contrast = 10000
     parameters = contrast*np.ones((num_samples, 2))
-    parameters[:,0] = np.linspace(-1,1,num_samples)
+    parameters[:,0] = np.linspace(0, 1,num_samples)
 elif store_tag == 'random_lines':
     num_lines = 10
     centers = np.random.uniform(0.1, 0.9, (num_samples, num_lines, 2))  # (num_samples, 10, 2)
     lengths = np.random.uniform(0.05, 0.4, (num_samples, num_lines, 1)) # (num_samples, 10, 1)
     angles  = np.random.uniform(0, np.pi, (num_samples, num_lines, 1))  # (num_samples, 10, 1)
     parameters = np.concatenate([centers, lengths, angles], axis=2).reshape(num_samples, num_lines * 4)  # (num_samples, 40)
+elif store_tag == 'rotated_channel_coeff':
+    p0_bound = 9/10*(y1-x0) - eps # guarantees that channel stays in subdomain 
+    p1_bound = 1/2*(y1-x0) - eps # guarantees that channel stays in subdomain 
+    angles  = np.random.uniform(0, np.pi, (num_samples, 1))  # (num_samples, 10, 1)
+    cy_coords = np.random.uniform(low=[eps,eps], high=[p0_bound, p1_bound], size=(num_samples, 2))
+    parameters = np.concatenate([cy_coords, angles], axis=1)
+elif store_tag == 'kl_coeff':
+    L = 100 # number of modes in the KL expansion
+    Nx_kl, Ny_kl = 128, 128 # grid resolution to discretize covariance operator
+    lx, ly = 0.02, 0.6 # lengthscales assuming gaussina covariance
+    sigma2 = 2.0 # variance
+    print('Discretizing Cov Operator...')
+    # Discretize covariance operator
+    C_weighted, quad_weights, grid_points, grid_shape = discretize_covariance_2d(
+        Nx_kl, Ny_kl, domain=(0, 1, 0, 1), lx=lx, ly=ly, sigma2=sigma2
+    )
+    print('Computing KL eigenfunctions and eigenvalues...')
+    # Solve eigenvalue problem
+    eigenvalues, eigenfunctions = solve_eigenvalue_problem(
+        C_weighted, quad_weights, num_modes=L
+    )
+    if not ops.path.exists('kl_data'):
+        ops.makedirs('kl_data')
+    np.save('kl_data/eigenvalues.npy', eigenvalues )
+    np.save('kl_data/eigenfunctions.npy', eigenfunctions)
+    print('KL computations done!')
+    parameters = np.random.normal(size=(num_samples, L))
 else:
+
     raise ValueError('store_tag %s not defined!'%(store_tag))
 
 print('Starting data generation for case: %s'%(store_tag))

@@ -27,9 +27,9 @@ Ny = 4
 ny = 2**8
 ol = 2
 os = 2
-nlocs = [10] # np.arange(1, 11, 1)
+nlocs = [20] # np.arange(1, 11, 1)
 rho = 0.0
-problem_label = 'random_lines' # other options : "source_dirichlet", "iid", "channel",  "skyscraper", "Dirichlet_FNO", "crosspoint_1d_coeff, random_lines"
+problem_label = 'kl_coeff' # other options : "source_dirichlet", "iid", "channel",  "skyscraper", "Dirichlet_FNO", "crosspoint_1d_coeff, random_lines"
 contrasts = np.array([10000])
 # length = 1 # length of channels
 

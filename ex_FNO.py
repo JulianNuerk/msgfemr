@@ -25,11 +25,11 @@ Ny = 4
 ny = 2**8
 ol = 2
 os = 2
-nloc = 4
+nloc = 5
 rho = 0.0
 subdom_idx = 5
-store_tag = 'kl_coeff' # channel_smooth_coeff, sinus_coeff, channel_coeff, crosspoint_1d_coeff
-num_samples = 12
+store_tag = 'sinus_coeff' # channel_smooth_coeff, sinus_coeff, channel_coeff, crosspoint_1d_coeff
+num_samples = 1200
 
 # parameters not to play with 
 x0 = 0.234375 # lower right corner of subdomain

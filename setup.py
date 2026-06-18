@@ -6,7 +6,7 @@ It includes utilities for homogeneous Dirichlet and Robin boundaries, as well as
 
 import numpy as np
 from dolfinx.fem import Function
-
+from KL_expansion import kl_expansion
 
 
 def getSetupSourceDirichlet(xL, yL, xR, yR, V, msh):
@@ -391,6 +391,71 @@ def channel_sub_dom_five(x, parameters):
     
     return parameters[2] * on_channel
 
+
+def rotated_channel_sub_dom_five(x, parameters):
+    """
+    Channel configuration for subdomain five, with rotation.
+
+    This method defines a channel within a subdomain and allows for it to be
+    rotated by a given angle theta. It works for subdomains that originate
+    from a regular 4x4 partition of the global domain.
+
+    Parameters
+    ----------
+    x : array-like
+        Input coordinates [x, y] for which to check if they are in the channel.
+    parameters : array-like
+        Parameters defining the channel's position and value.
+        - parameters[0]: x-offset from the corner of the subdomain.
+        - parameters[1]: y-offset from the corner of the subdomain.
+        - parameters[2]: Rotation angle of the channel
+
+    Returns
+    -------
+    float
+        The channel value if the point x is inside the rotated channel,
+        otherwise 0.
+    """
+    # --- Define Subdomain and Channel Geometry ---
+    # These values are based on a regular 4x4 partition of a unit square.
+    x0 = 0.234375  # Lower-left x-coordinate of the subdomain corner
+    y0 = 0.234375  # Assuming the subdomain is square, so y0 is the same
+    y1 = 0.515625  # Upper-right y-coordinate
+    
+    width_channel = np.abs(y1 - x0) / 10
+    high_channel = np.abs(y1 - x0) / 2
+    
+    channel_x0 = parameters[0]
+    channel_y0 = parameters[1]
+    theta = parameters[2]
+
+    # --- Rotation Logic ---
+    # 1. Calculate the center of the original, un-rotated channel.
+    # This will be our center of rotation.
+    center_x = x0 + channel_x0 + width_channel / 2.0
+    center_y = y0 + channel_y0 + high_channel / 2.0
+
+    # 2. Translate the input point's coordinates so the center of rotation is at the origin.
+    x_translated = x[0] - center_x
+    y_translated = x[1] - center_y
+
+    # 3. Apply the inverse rotation to the translated point.
+    # This brings the point into the coordinate system of the un-rotated channel.
+    cos_theta = np.cos(-theta)
+    sin_theta = np.sin(-theta)
+    x_unrotated = x_translated * cos_theta - y_translated * sin_theta
+    y_unrotated = x_translated * sin_theta + y_translated * cos_theta
+
+    # 4. Check if the un-rotated point lies inside the original, un-rotated channel.
+    # The original channel is now centered at (0,0) in this new coordinate system.
+    on_channel = np.logical_and(
+        np.abs(x_unrotated) <= width_channel / 2.0,
+        np.abs(y_unrotated) <= high_channel / 2.0
+    )
+
+    return 1000 * on_channel
+
+
 def channel_smooth(x, parameters, sharpness=100):
     """
     Smooth bump function centered at 'parameters[:2]' with height 'parameters[2]'.
@@ -439,6 +504,7 @@ def crosspoint_1d_coeff(x, parameters):
     y = parameters[0]
     contrast = parameters[1]
     value = 1 + (contrast - 1)/(contrast + 1)*y*crosspoint_1d(x)
+    np.save('x.npy', x)
     return value 
 
 # random lines
@@ -522,6 +588,12 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
             coeff_A_function = lambda x : crosspoint_1d_coeff(x, parameters)
         elif store_tag == 'random_lines':
             coeff_A_function = lambda x : random_lines(x, parameters)
+        elif store_tag == 'rotated_channel_coeff':
+            coeff_A_function = lambda x : 1 + rotated_channel_sub_dom_five(x, parameters)
+        elif store_tag == 'kl_coeff':
+            eigenvalues = np.load('kl_data/eigenvalues.npy')
+            eigenfunctions = np.load('kl_data/eigenfunctions.npy')
+            coeff_A_function = lambda x : kl_expansion(x, parameters, eigenvalues, eigenfunctions)
         else:
             raise ValueError('Coefficient function for %s not defined, please implement here...!'%(store_tag))
         

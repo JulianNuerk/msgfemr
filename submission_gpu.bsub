@@ -1,0 +1,32 @@
+#!/bin/bash -l
+#BSUB -J msgfem_FNO_data_gen[1-3]                         # Job array spanning 3 tasks
+#BSUB -o cluster_job_info/msgfem_FNO.%J.%I.stdout         # %J is Job ID, %I is array index
+#BSUB -e cluster_job_info/msgfem_FNO.%J.%I.stderr
+#BSUB -q batch_b200                                             # Use B200 node queue (adjust queue name if needed)
+#BSUB -W 12:00                                            # Wallclock time (12 hours)
+#BSUB -n 4                                                # Request 4 CPU cores per task
+#BSUB -R "span[hosts=1]"                                  # Ensure cores are on the same host
+#BSUB -R "rusage[mem=64G]"                                # Allocate 64 GB of RAM
+#BSUB -gpu "num=1:mode=exclusive_process"                 # Allocate 1 GPU in exclusive mode per task
+
+# Load modules
+module purge
+module load cuda cudnn
+
+# Activate virtual environment
+vEnv=msgfemr
+mamba activate $vEnv
+which python
+
+# Define the array of parameters to loop through
+TAGS=("random_lines" "channel_coeff" "kl_coeff")
+
+# LSF array index ($LSB_JOBINDEX) starts at 1, bash arrays start at 0
+CURRENT_TAG=${TAGS[$LSB_JOBINDEX - 1]}
+
+echo "Starting job on host: $HOSTNAME"
+echo "Assigned GPU: $CUDA_VISIBLE_DEVICES"
+echo "Running ex_FNO.py with store_tag = $CURRENT_TAG"
+
+# Run the python script with the mapped argument
+python ex_FNO.py --store_tag $CURRENT_TAG

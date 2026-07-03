@@ -1,0 +1,27 @@
+#!/bin/bash -l
+#BSUB -J msgfem_FNO_data_gen[1-3]                         # Job array spanning 3 tasks
+#BSUB -o cluster_job_info/test_msgfem_FNO.%J.%I.stdout         
+#BSUB -e cluster_job_info/test_msgfem_FNO.%J.%I.stderr
+#BSUB -q batch_cpu                                     # Dedicated CPU queue
+#BSUB -W 24:00                                            # Wallclock time (Update after test)
+#BSUB -n 4                                                # CPU cores per task (Update after test)
+#BSUB -R "span[hosts=1]"                                  # Ensure cores are on the same host
+#BSUB -R "rusage[mem=4G]"                                # RAM allocation (Update after test)
+
+# Load modules (removed CUDA since it's CPU only)
+module purge
+
+# Activate virtual environment
+vEnv=msgfemr
+mamba activate $vEnv
+
+# Define the array of parameters to loop through
+TAGS=("random_lines" "channel_coeff" "kl_coeff")
+
+CURRENT_TAG=${TAGS[$LSB_JOBINDEX - 1]}
+
+echo "Starting CPU-only job on host: $HOSTNAME"
+echo "Running ex_FNO.py with store_tag = $CURRENT_TAG and num_samples = 120000"
+
+# Run the python script
+python ex_FNO.py --store_tag $CURRENT_TAG --num_samples 120000

@@ -2,39 +2,47 @@
 Generates Data and uses FNOs to solve the local Eigenvalue problems in the MSGFEM method.
 """
 
+import argparse
 import experiments_driver as ed
-
+from pathlib import Path
 import ray
 import numpy as np
-# ray.init(num_cpus=1)  # uncomment if want to run serially
 import helper
 import datetime
 import os as ops
-
 from KL_expansion import discretize_covariance_2d, solve_eigenvalue_problem, kl_expansion
 
-# Generate a timestamp
-timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-np.random.seed(42)
+# Setup argparse to accept command line arguments
+parser = argparse.ArgumentParser(description="Generate data for MSGFEM")
+parser.add_argument("--store_tag", type=str, required=True, help="Varying parameter tag")
+parser.add_argument("--num_samples", type=int, default=1200, help="Number of samples to generate")
+parser.add_argument("--nloc", type=int, default=5, help="Number of local basis functions")
 
-commit_hash = helper.get_commit_hash()
+args = parser.parse_args()
+# Set store_tag from the command line argument
+store_tag = args.store_tag
+num_samples = args.num_samples
+nloc = args.nloc
 
-# parameters to play with
+# Define the absolute path to your target scratch directory
+BASE_DIR = Path("/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/fenics_out_data")
+OUT_DIR = BASE_DIR / store_tag / f"samples_{num_samples}"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# no need to play with but can be changed
 deg = 1
 Ny = 4
 ny = 2**8
 ol = 2
 os = 2
-nloc = 5
 rho = 0.0
 subdom_idx = 5
-store_tag = 'kl_coeff' # channel_smooth_coeff, sinus_coeff, channel_coeff, crosspoint_1d_coeff
-num_samples = 12
 
 # parameters not to play with 
 x0 = 0.234375 # lower right corner of subdomain
 y1 = 0.515625 # upper left corner 
 eps = 1e-08
+np.random.seed(42)
 
 if store_tag == 'channel_coeff':
     p0_bound = 9/10*(y1-x0) - eps # guarantees that channel stays in subdomain 
@@ -60,39 +68,21 @@ elif store_tag == 'crosspoint_1d_coeff':
     parameters[:,0] = np.linspace(0, 1,num_samples)
 elif store_tag == 'random_lines':
     num_lines = 10
-    centers = np.random.uniform(0.1, 0.9, (num_samples, num_lines, 2))  # (num_samples, 10, 2)
-    lengths = np.random.uniform(0.05, 0.4, (num_samples, num_lines, 1)) # (num_samples, 10, 1)
-    angles  = np.random.uniform(0, np.pi, (num_samples, num_lines, 1))  # (num_samples, 10, 1)
-    parameters = np.concatenate([centers, lengths, angles], axis=2).reshape(num_samples, num_lines * 4)  # (num_samples, 40)
+    centers = np.random.uniform(0.1, 0.9, (num_samples, num_lines, 2))  
+    lengths = np.random.uniform(0.05, 0.4, (num_samples, num_lines, 1)) 
+    angles  = np.random.uniform(0, np.pi, (num_samples, num_lines, 1))  
+    parameters = np.concatenate([centers, lengths, angles], axis=2).reshape(num_samples, num_lines * 4) 
 elif store_tag == 'rotated_channel_coeff':
-    p0_bound = 9/10*(y1-x0) - eps # guarantees that channel stays in subdomain 
-    p1_bound = 1/2*(y1-x0) - eps # guarantees that channel stays in subdomain 
-    angles  = np.random.uniform(0, np.pi, (num_samples, 1))  # (num_samples, 10, 1)
+    p0_bound = 9/10*(y1-x0) - eps 
+    p1_bound = 1/2*(y1-x0) - eps 
+    angles  = np.random.uniform(0, np.pi, (num_samples, 1))  
     cy_coords = np.random.uniform(low=[eps,eps], high=[p0_bound, p1_bound], size=(num_samples, 2))
     parameters = np.concatenate([cy_coords, angles], axis=1)
 elif store_tag == 'kl_coeff':
-    L = 100 # number of modes in the KL expansion
-    Nx_kl, Ny_kl = 128, 128 # grid resolution to discretize covariance operator
-    lx, ly = 0.02, 0.6 # lengthscales assuming gaussina covariance
-    sigma2 = 2.0 # variance
-    print('Discretizing Cov Operator...')
-    # Discretize covariance operator
-    C_weighted, quad_weights, grid_points, grid_shape = discretize_covariance_2d(
-        Nx_kl, Ny_kl, domain=(0, 1, 0, 1), lx=lx, ly=ly, sigma2=sigma2
-    )
-    print('Computing KL eigenfunctions and eigenvalues...')
-    # Solve eigenvalue problem
-    eigenvalues, eigenfunctions = solve_eigenvalue_problem(
-        C_weighted, quad_weights, num_modes=L
-    )
-    if not ops.path.exists('kl_data'):
-        ops.makedirs('kl_data')
-    np.save('kl_data/eigenvalues.npy', eigenvalues )
-    np.save('kl_data/eigenfunctions.npy', eigenfunctions)
-    print('KL computations done!')
+    L = 100
+    print(f'KL coeff: we assume that L = {L} eigenfunctions and values are already precomputed and stored in /kl_data!')
     parameters = np.random.normal(size=(num_samples, L))
 else:
-
     raise ValueError('store_tag %s not defined!'%(store_tag))
 
 print('Starting data generation for case: %s'%(store_tag))
@@ -101,26 +91,16 @@ for idx, parameter in enumerate(parameters):
     print('Parameters: %s.'%(parameter))
     coeff_A_FNO, basis_funs, vecs_tmp, eig_vals, input_indices = ed.run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameter, subdom_idx)
 
-    # store data
-    path_ = "data_FNO/%s/samples_%s"%(store_tag,num_samples)
-    if not ops.path.exists(path_):
-        ops.makedirs(path_)
-
-    np.save(ops.path.join(path_, "phi_sub_dom_%s_sample_%s.npy"%(subdom_idx, idx)), basis_funs)
-    np.save(ops.path.join(path_, "coeff_A_sub_dom_%s_sample_%s.npy"%(subdom_idx, idx)), coeff_A_FNO)
-    np.save(ops.path.join(path_, "eig_vals_sub_dom_%s_sample_%s.npy"%(subdom_idx, idx)), eig_vals)
-    np.save(ops.path.join(path_, "vecs_tmp_sub_dom_%s_sample_%s.npy"%(subdom_idx, idx)), vecs_tmp)
-    np.save(ops.path.join(path_, "indices_for_reshape_2d_sub_dom_%s.npy"%subdom_idx), input_indices)
-
+    np.save(OUT_DIR / f"phi_sub_dom_{subdom_idx}_sample_{idx}.npy", basis_funs)
+    np.save(OUT_DIR / f"coeff_A_sub_dom_{subdom_idx}_sample_{idx}.npy", coeff_A_FNO)
+    np.save(OUT_DIR / f"eig_vals_sub_dom_{subdom_idx}_sample_{idx}.npy", eig_vals)
+    np.save(OUT_DIR / f"vecs_tmp_sub_dom_{subdom_idx}_sample_{idx}.npy", vecs_tmp)
+    np.save(OUT_DIR / f"indices_for_reshape_2d_sub_dom_{subdom_idx}.npy", input_indices)
 
 if store_tag == "crosspoint_1d_coeff":
-    np.save(ops.path.join(path_, 'input_paras_num_samples_%s.npy'%num_samples), parameters[:,0])
+    np.save(OUT_DIR / f"input_paras_num_samples_{num_samples}.npy", parameters[:,0])
 else:
-    np.save(ops.path.join(path_, 'input_paras_num_samples_%s.npy'%num_samples), parameters)
+    np.save(OUT_DIR / f"input_paras_num_samples_{num_samples}.npy", parameters)
         
 print('FNO data generation completed!')
 ray.shutdown()
-
-
-
-

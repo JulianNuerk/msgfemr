@@ -22,7 +22,7 @@ args = parser.parse_args()
 # Set store_tag from the command line argument
 store_tag = args.store_tag
 num_samples = args.num_samples
-nloc = args.nloc #test push 
+nloc = args.nloc 
 
 # Define the absolute path to your target scratch directory
 BASE_DIR = Path("/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/fenics_out_data")

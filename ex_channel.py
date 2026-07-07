@@ -29,7 +29,7 @@ ol = 2
 os = 2
 nlocs = [20] # np.arange(1, 11, 1)
 rho = 0.0
-problem_label = 'kl_coeff' # other options : "source_dirichlet", "iid", "channel",  "skyscraper", "Dirichlet_FNO", "crosspoint_1d_coeff, random_lines"
+problem_label = 'channel' # other options : "source_dirichlet", "iid", "channel",  "skyscraper", "Dirichlet_FNO", "crosspoint_1d_coeff, random_lines"
 contrasts = np.array([10000])
 # length = 1 # length of channels
 

@@ -2,6 +2,8 @@
 This is  a fork of used for learning local subspaces in msgfemr as descrived in the preprint https://arxiv.org/pdf/2507.12226. 
 This repository includes scripts and tools for reproducing the figures and results presented in the publication.
 
+Include more detailed explanation here...
+
 ## Features
 
 - Example scripts (`ex_...`) to reproduce figures and results.

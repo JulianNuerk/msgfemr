@@ -316,11 +316,12 @@ def run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameter
     coord_global = V.tabulate_dof_coordinates()
 
     perturbation_parameter = 0.0
-    coeff_A_FNO, eig_func_2d, vecs_tmp, vals, input_indices = msgfem.computeSubdomainFNO((xR, xL, yR, yL, ol, os, Nx, 
+    coeff_A_FNO, eig_func_2d, vecs_tmp, vals, input_indices, eig_solve_time = msgfem.computeSubdomainFNO((xR, xL, yR, yL, ol, os, Nx, 
                                                             Ny, nx, ny, nDom, coeff_A_function, deg, nloc,
                                                             domain_idx, coord_global, dirichlet_boundary, robin_boundary, 
                                                             perturbation_parameter, rho))
-    
-    return coeff_A_FNO, eig_func_2d, vecs_tmp, vals, input_indices
+    print(f"eigsh solve time for this sample: {eig_solve_time:.4f} s", flush=True)
+
+    return coeff_A_FNO, eig_func_2d, vecs_tmp, vals, input_indices, eig_solve_time
 
     

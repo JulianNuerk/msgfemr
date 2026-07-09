@@ -108,16 +108,20 @@ else:
     raise ValueError('store_tag %s not defined!'%(store_tag))
 
 print('Starting data generation for case: %s'%(store_tag))
+eig_solve_times = np.zeros(num_samples)
 for idx, parameter in enumerate(parameters):
     print('Sample Nr.:', idx)
     print('Parameters: %s.'%(parameter))
-    coeff_A_FNO, basis_funs, vecs_tmp, eig_vals, input_indices = ed.run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameter, subdom_idx)
+    coeff_A_FNO, basis_funs, vecs_tmp, eig_vals, input_indices, eig_solve_time = ed.run_fno_data_generation(deg, Ny, ny, ol, os, nloc, rho, store_tag, parameter, subdom_idx)
 
     np.save(OUT_DIR / f"phi_sub_dom_{subdom_idx}_sample_{idx}.npy", basis_funs)
     np.save(OUT_DIR / f"coeff_A_sub_dom_{subdom_idx}_sample_{idx}.npy", coeff_A_FNO)
     np.save(OUT_DIR / f"eig_vals_sub_dom_{subdom_idx}_sample_{idx}.npy", eig_vals)
     np.save(OUT_DIR / f"vecs_tmp_sub_dom_{subdom_idx}_sample_{idx}.npy", vecs_tmp)
     np.save(OUT_DIR / f"indices_for_reshape_2d_sub_dom_{subdom_idx}.npy", input_indices)
+    eig_solve_times[idx] = eig_solve_time
+
+np.save(OUT_DIR / f"eig_solve_times.npy", eig_solve_times)
 
 if store_tag == "crosspoint_1d_coeff":
     np.save(OUT_DIR / f"input_paras_num_samples_{num_samples}.npy", parameters[:,0])

@@ -709,7 +709,10 @@ def computeSubdomain(parameters):
         nloc_step = np.rint(len(interior_bdry_and_robin_bdry_dofs) / 10 + 1).astype(int)
         while True:  
             # Solve eigenproblem 
+            t_eig_start = time.perf_counter()
             vals, vecs = eigsh(MA, k=nloc_tmp, M=MB, sigma=0)
+            t_eig_elapsed = time.perf_counter() - t_eig_start
+            print(f"eigsh solve time: {t_eig_elapsed:.4f} s (k={nloc_tmp}, n={MA.shape[0]})", flush=True)
             vals = 1/vals
             vals = np.abs(vals)          # Sometimes get negative eigenvalue corresponding to the zero eigenvalue, so take absolute value for proper ordering
             vals, vecs = helper.sort_eigenpairs(vals, vecs)
@@ -726,7 +729,10 @@ def computeSubdomain(parameters):
     else:
         # Solve eigenproblem 
         
+        t_eig_start = time.perf_counter()
         vals, vecs = eigsh(MA, k=nloc, M=MB, sigma=0)
+        t_eig_elapsed = time.perf_counter() - t_eig_start
+        print(f"eigsh solve time: {t_eig_elapsed:.4f} s (k={nloc}, n={MA.shape[0]})", flush=True)
         vals = 1/vals
         vals = np.abs(vals)          # Sometimes get negative eigenvalue corresponding to the zero eigenvalue, so take absolute value for proper ordering
         vals, vecs = helper.sort_eigenpairs(vals, vecs)
@@ -1078,6 +1084,7 @@ def computeSubdomainFNO(parameters):
             ]
     )
 
+    eig_solve_time = 0.0
     if rho > 0.0:
         # This if statement checks whether the eigenvalue cutoff parameter `rho` is greater than zero.
         # If so, it starts with an initial guess for the number of eigenvectors (`nloc_tmp`) and increases it in steps (`nloc_step`)
@@ -1088,7 +1095,11 @@ def computeSubdomainFNO(parameters):
         nloc_step = np.rint(len(interior_bdry_and_robin_bdry_dofs) / 10 + 1).astype(int)
         while True:  
             # Solve eigenproblem 
+            t_eig_start = time.perf_counter()
             vals, vecs = eigsh(MA, k=nloc_tmp, M=MB, sigma=0)
+            t_eig_elapsed = time.perf_counter() - t_eig_start
+            eig_solve_time += t_eig_elapsed
+            print(f"eigsh solve time: {t_eig_elapsed:.4f} s (k={nloc_tmp}, n={MA.shape[0]})", flush=True)
             vals = 1/vals
             vals = np.abs(vals)          # Sometimes get negative eigenvalue corresponding to the zero eigenvalue, so take absolute value for proper ordering
             vals, vecs = helper.sort_eigenpairs(vals, vecs)
@@ -1104,7 +1115,11 @@ def computeSubdomainFNO(parameters):
                 break
     else:
         # Solve eigenproblem 
+        t_eig_start = time.perf_counter()
         vals, vecs = eigsh(MA, k=nloc, M=MB, sigma=0)
+        t_eig_elapsed = time.perf_counter() - t_eig_start
+        eig_solve_time = t_eig_elapsed
+        print(f"eigsh solve time: {t_eig_elapsed:.4f} sec. ([nx, ny]={omega_os.nx + 1, omega_os.ny + 1}", flush=True)
         vals = 1/vals
         vals = np.abs(vals)          # Sometimes get negative eigenvalue corresponding to the zero eigenvalue, so take absolute value for proper ordering
         vals, vecs = helper.sort_eigenpairs(vals, vecs)
@@ -1123,7 +1138,7 @@ def computeSubdomainFNO(parameters):
         ix, iy = idxs
         eigenfunctions_2d[ix, iy, :] = vecs_tmp[i]
     
-    return (coeff_A_FNO, eigenfunctions_2d, vecs_tmp, vals, input_indices)
+    return (coeff_A_FNO, eigenfunctions_2d, vecs_tmp, vals, input_indices, eig_solve_time)
 
 
 # def gfem_solve(rhs, A_gfem, local_data, nDom, nloc_cut): 

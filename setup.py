@@ -551,6 +551,56 @@ def random_lines(x, p):
 
     return z
 
+
+def bubble_coeff(x, p):
+    """
+    Coefficient function A(x, p) that creates a piecewise-constant field with
+    five circular "bubbles" of random center, radius and height on a low
+    background. Bubbles are confined to a square subdomain [x0, y1] x [x0, y1]
+    whose bounds are also encoded in the parameter vector p.
+
+    Parameters
+    ----------
+    x : np.ndarray, shape (2, num_gridpoints)
+        Spatial coordinates; x[0] = x-coords, x[1] = y-coords.
+    p : np.ndarray, shape (2 + 5 * 4,) = (22,)
+        Parameter vector:
+            p[0] = x0   subdomain lower bound (used for both x and y)
+            p[1] = y1   subdomain upper bound (used for both x and y)
+        For each bubble i = 0, ..., 4:
+            p[2 + 4 * i]     = cx      center x coordinate
+            p[2 + 4 * i + 1] = cy      center y coordinate
+            p[2 + 4 * i + 2] = radius
+            p[2 + 4 * i + 3] = height  (contrast value inside the bubble)
+
+    The sampling of the bubble parameters (done outside this function, e.g.
+    in ex_FNO.py) must ensure that every bubble is fully contained in the
+    subdomain, i.e. cx - r >= x0, cx + r <= y1, cy - r >= x0, cy + r <= y1.
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        Coefficient values (0.1 background, up to 100 inside a bubble).
+    """
+    background = 0.1
+    num_bubbles = (len(p) - 2) // 4
+
+    z = np.full(x.shape[1], background)
+
+    for i in range(num_bubbles):
+        cx     = p[2 + 4 * i]
+        cy     = p[2 + 4 * i + 1]
+        radius = p[2 + 4 * i + 2]
+        height = p[2 + 4 * i + 3]
+
+        dx = x[0] - cx
+        dy = x[1] - cy
+        mask = (dx * dx + dy * dy) <= radius * radius
+        z[mask] = height
+
+    return z
+
+
 def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
         
         def robin_boundary(x):
@@ -588,6 +638,8 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
             coeff_A_function = lambda x : crosspoint_1d_coeff(x, parameters)
         elif store_tag == 'random_lines':
             coeff_A_function = lambda x : random_lines(x, parameters)
+        elif store_tag == 'bubble_coeff':
+            coeff_A_function = lambda x : bubble_coeff(x, parameters)
         elif store_tag == 'rotated_channel_coeff':
             coeff_A_function = lambda x : 1 + rotated_channel_sub_dom_five(x, parameters)
         elif store_tag == 'kl_coeff':

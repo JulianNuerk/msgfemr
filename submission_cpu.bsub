@@ -1,9 +1,10 @@
 #!/bin/bash -l
-#BSUB -J msgfem_FNO_data_gen[1-3]                         # Job array spanning 3 tasks
+#BSUB -J msgfem_FNO_data_gen[1]                         # Job array spanning 1 task
+#BSUB -P BH-000543
 #BSUB -o cluster_job_info/test_msgfem_FNO.%J.%I.stdout         
 #BSUB -e cluster_job_info/test_msgfem_FNO.%J.%I.stderr
 #BSUB -q batch_cpu                                     # Dedicated CPU queue
-#BSUB -W 24:00                                            # Wallclock time (Update after test)
+#BSUB -W 8:00                                            # Wallclock time (Update after test)
 #BSUB -n 4                                                # CPU cores per task (Update after test)
 #BSUB -R "span[hosts=1]"                                  # Ensure cores are on the same host
 #BSUB -R "rusage[mem=4G]"                                # RAM allocation (Update after test)
@@ -16,7 +17,7 @@ vEnv=msgfemr
 mamba activate $vEnv
 
 # Define the array of parameters to loop through
-TAGS=("random_lines" "channel_coeff" "kl_coeff")
+TAGS=("bubble_coeff")
 
 CURRENT_TAG=${TAGS[$LSB_JOBINDEX - 1]}
 

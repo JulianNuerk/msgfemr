@@ -72,6 +72,28 @@ elif store_tag == 'random_lines':
     lengths = np.random.uniform(0.05, 0.4, (num_samples, num_lines, 1)) 
     angles  = np.random.uniform(0, np.pi, (num_samples, num_lines, 1))  
     parameters = np.concatenate([centers, lengths, angles], axis=2).reshape(num_samples, num_lines * 4) 
+elif store_tag == 'bubble_coeff':
+    # Five circular bubbles per sample confined to the square subdomain
+    # [x0, y1] x [x0, y1]. Layout of the parameter vector per sample:
+    #   [x0, y1, cx_1, cy_1, r_1, h_1, ..., cx_5, cy_5, r_5, h_5]
+    num_bubbles = 5
+    side = y1 - x0                          # subdomain side length
+    r_min = side / 50                       # minimum bubble radius
+    r_max = side / 6                        # keeps bubbles well inside subdomain
+    h_min = 1.0                             # minimum bubble height (contrast)
+    h_max = 100.0                           # maximum bubble height (contrast)
+
+    parameters = np.zeros((num_samples, 2 + num_bubbles * 4))
+    parameters[:, 0] = x0
+    parameters[:, 1] = y1
+    for s in range(num_samples):
+        for b in range(num_bubbles):
+            r  = np.random.uniform(r_min, r_max)
+            # Sample center so the whole disk lies strictly inside the subdomain
+            cx = np.random.uniform(x0 + r + eps, y1 - r - eps)
+            cy = np.random.uniform(x0 + r + eps, y1 - r - eps)
+            h  = np.random.uniform(h_min, h_max)
+            parameters[s, 2 + 4 * b: 2 + 4 * (b + 1)] = [cx, cy, r, h]
 elif store_tag == 'rotated_channel_coeff':
     p0_bound = 9/10*(y1-x0) - eps 
     p1_bound = 1/2*(y1-x0) - eps 

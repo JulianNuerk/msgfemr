@@ -399,6 +399,15 @@ def computeSubdomain(parameters):
             Indices of interior degrees of freedom for the subdomain.
     """
 
+    # Optional 22nd parameter: a prediction that replaces the local eigsolve.
+    # When provided, `prediction` must have shape (k, omega_os.nx+1, omega_os.ny+1)
+    # matching the local subdomain grid; it is reshaped to (n_dofs, k) and used
+    # directly as `vecs_tmp` instead of solving the local eigenvalue problem.
+    if len(parameters) == 22:
+        prediction = parameters[21]
+        parameters = parameters[:21]
+    else:
+        prediction = None
 
     (xR,xL,yR,yL,ol,os,Nx,Ny,nx,ny,nDom,coeff_A_function,deg,nloc,i_subdom,coord_global, dirichlet_boundary, robin_boundary, perturbation_parameter, rho, bool_ring) = parameters
 
@@ -699,7 +708,24 @@ def computeSubdomain(parameters):
             ]
     )
 
-    if rho > 0.0:
+    if prediction is not None:
+        # Skip the eigsolve and use the provided prediction as vecs_tmp.
+        # `prediction` has shape (k, omega_os.nx+1, omega_os.ny+1). We invert
+        # the (nx+1, ny+1)-reshape done in computeSubdomainFNO using the local
+        # dof coordinates to obtain a (n_dofs, k) array compatible with the
+        # rest of the code.
+        print(f'Prediction provided, skipping eigsolve for subdomain {i_subdom}!')
+        dof_coord_local = Vs.tabulate_dof_coordinates()
+        indices = (dof_coord_local[:, :-1] - omega_os.x0) * np.array([nx, ny])
+        input_indices = np.round(indices).astype(np.int32)
+        k_pred = prediction.shape[0]
+        vecs_tmp = np.zeros((Xi.shape[0], k_pred))
+        for _ii, _idxs in enumerate(input_indices):
+            _ix, _iy = _idxs
+            vecs_tmp[_ii, :] = prediction[:, _ix, _iy]
+         # TODO(julian): Include eigenvalue predictions as well. For now, we just return zeros for the eigenvalues.   
+        vals = np.zeros(k_pred)
+    elif rho > 0.0:
         # This if statement checks whether the eigenvalue cutoff parameter `rho` is greater than zero.
         # If so, it starts with an initial guess for the number of eigenvectors (`nloc_tmp`) and increases it in steps (`nloc_step`)
         # until all eigenvalues above the cutoff (`rho**2`) are found.
@@ -737,9 +763,10 @@ def computeSubdomain(parameters):
         vals = np.abs(vals)          # Sometimes get negative eigenvalue corresponding to the zero eigenvalue, so take absolute value for proper ordering
         vals, vecs = helper.sort_eigenpairs(vals, vecs)
         
-    vecs_tmp = np.zeros((Xi.shape[0], vecs.shape[1]))
-    vecs_tmp[non_dirichlet_dofs,:] = vecs[:len(non_dirichlet_dofs), :]
-    vecs_tmp, _ = np.linalg.qr(vecs_tmp)
+    if prediction is None:
+        vecs_tmp = np.zeros((Xi.shape[0], vecs.shape[1]))
+        vecs_tmp[non_dirichlet_dofs,:] = vecs[:len(non_dirichlet_dofs), :]
+        vecs_tmp, _ = np.linalg.qr(vecs_tmp)
 
     if bool_ring:
         # Extend a-harmonically to the interior
@@ -754,13 +781,14 @@ def computeSubdomain(parameters):
         # Locate interior dofs of ommin
         ommin_interior_dofs = locate_dofs_geometrical(Vs, omega_min.interior)
 
-        # Harmonically extend
-        u_g = vecs_tmp
-        u_0 = spsolve(A_ommin[ommin_interior_dofs,:][:,ommin_interior_dofs], - A_ommin.dot(u_g)[ommin_interior_dofs])
-        if nloc > 1:
-            vecs_tmp[ommin_interior_dofs, :] = u_g[ommin_interior_dofs, :] + u_0
-        else:
-            vecs_tmp[ommin_interior_dofs,0] = u_g[ommin_interior_dofs,0] + u_0
+        if prediction is None:
+            # Harmonically extend
+            u_g = vecs_tmp
+            u_0 = spsolve(A_ommin[ommin_interior_dofs,:][:,ommin_interior_dofs], - A_ommin.dot(u_g)[ommin_interior_dofs])
+            if nloc > 1:
+                vecs_tmp[ommin_interior_dofs, :] = u_g[ommin_interior_dofs, :] + u_0
+            else:
+                vecs_tmp[ommin_interior_dofs,0] = u_g[ommin_interior_dofs,0] + u_0
 
         # assemble matrix for local solves, which will be return of this function
         a = inner(coeff_A * grad(u), grad(v)) * dx

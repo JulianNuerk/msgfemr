@@ -221,7 +221,7 @@ def _compute_uG(V, msh, coeff_A_function, coeff_A, u_D, f,
 def compute_overall_errors(store_tag, parameters, predictions_data,
                            deg=1, Ny=4, ny=2 ** 8, ol=2, os_=2, nloc=5,
                            rho=0.0, bool_ring=False, plot=True,
-                           plot_root="plots/overall_preds"):
+                           plot_root="plots/overall_predictions"):
     """Evaluate the effect of network-predicted local bases on the overall
     MS-GFEM solution for every sample in ``parameters``.
 
@@ -335,9 +335,11 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
         dirichlet_dofs_global = locate_dofs_geometrical(V, dirichlet_boundary)
         bc = dirichletbc(u_D, dirichlet_dofs_global)
         a, L = helper.getEllipticProblem(coeff_A, f, V)
+        print('Compute reference uh via fine-scale FEM solve...')
         uh = msgfem.fem_solve(V, a, L, bc)
-
+        print('Done computing uh!')
         # Classical MS-GFEM solution (all subdomains via eigsolve)
+        print('Compute uG')
         uG = _compute_uG(
             V, msh, coeff_A_function, coeff_A, u_D, f,
             dirichlet_boundary, robin_boundary,
@@ -345,8 +347,10 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
             xL, yL, xR, yR, coord_global,
             predictions_sample=None,
         )
+        print('Done computing uG!')
 
         # Hybrid MS-GFEM solution (predictions where available, eigsolves elsewhere)
+        print('Compute uG_pred')
         uG_pred = _compute_uG(
             V, msh, coeff_A_function, coeff_A, u_D, f,
             dirichlet_boundary, robin_boundary,
@@ -354,6 +358,7 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
             xL, yL, xR, yR, coord_global,
             predictions_sample=predictions_sample,
         )
+        print('Done computing uG_pred!')
 
         # Three relative energy errors
         err_uG_vs_uh[sample_idx] = helper.compute_errors(uG, uh, msh, coeff_A)
@@ -373,6 +378,11 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
             _plot_to_path(uG,     msh, os.path.join(plot_dir, f"uG_sample_{sample_idx}"))
             _plot_to_path(uG_pred, msh, os.path.join(plot_dir, f"uG_pred_sample_{sample_idx}"))
 
+            # Absolute prediction error field |uG - uG_pred|
+            u_abs_err = Function(V)
+            u_abs_err.vector.array[:] = np.abs(uG.vector.array - uG_pred.vector.array)
+            _plot_to_path(u_abs_err, msh, os.path.join(plot_dir, f"abs_err_uG_vs_uG_pred_sample_{sample_idx}"))
+
     return {
         "store_tag": store_tag,
         "sub_dom_idx": sorted(predictions_data.keys()),
@@ -385,10 +395,9 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
 if __name__ == "__main__":
     # Minimal smoke test: load parameters and predictions produced by ex_FNO.py
     # and run compute_overall_errors.  ``--predictions`` must point at a .npz
-    # file whose keys are of the form ``subdom_<int>`` (e.g. ``subdom_5``) and
-    # whose values have shape ``(num_samples, k, nx+1, ny+1)``.
+    # file whose keys are the (stringified) subdomain indices (e.g. ``"5"``)
+    # and whose values have shape ``(num_samples, k, nx+1, ny+1)``.
     import argparse
-    import re
 
     parser = argparse.ArgumentParser(
         description="Evaluate FNO predictions on the overall MS-GFEM solution.",
@@ -398,26 +407,31 @@ if __name__ == "__main__":
     parser.add_argument("--parameters", type=str, required=True,
                         help="Path to a .npy file of shape (num_samples, sample_dim).")
     parser.add_argument("--predictions", type=str, required=True,
-                        help="Path to a .npz file with keys 'subdom_<i>' and "
-                             "values of shape (num_samples, k, nx+1, ny+1).")
+                        help="Path to a .npz file with integer-string keys "
+                             "(e.g. '5') and values of shape "
+                             "(num_samples, k, nx+1, ny+1).")
     parser.add_argument("--nloc", type=int, default=5)
-    parser.add_argument("--out", type=str, default="integrate_predictions_errors.npz",
-                        help="Where to store the resulting error arrays.")
+    parser.add_argument("--out", type=str, default=None,
+                        help="Where to store the resulting error arrays. "
+                             "Defaults to 'errors/<store_tag>/errors.npz'.")
     args = parser.parse_args()
+
+    if args.out is None:
+        args.out = os.path.join("errors", args.store_tag, "errors.npz")
 
     parameters = np.load(args.parameters)
 
-    key_pattern = re.compile(r"^subdom_(\d+)$")
     with np.load(args.predictions) as _npz:
         predictions_data = {}
         for key in _npz.files:
-            m = key_pattern.match(key)
-            if m is None:
+            try:
+                idx = int(key)
+            except ValueError as exc:
                 raise ValueError(
                     f"Unexpected key {key!r} in {args.predictions}; "
-                    "expected 'subdom_<int>'."
-                )
-            predictions_data[int(m.group(1))] = _npz[key]
+                    "expected an integer string (e.g. '5')."
+                ) from exc
+            predictions_data[idx] = _npz[key]
 
     result = compute_overall_errors(
         store_tag=args.store_tag,
@@ -426,5 +440,8 @@ if __name__ == "__main__":
         nloc=args.nloc,
     )
 
+    out_parent = os.path.dirname(args.out)
+    if out_parent:
+        os.makedirs(out_parent, exist_ok=True)
     np.savez(args.out, **result)
     print(f"Wrote errors to {args.out}")

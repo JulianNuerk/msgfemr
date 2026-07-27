@@ -121,7 +121,7 @@ def getSetupChannel(xL, yL, xR, yR, V, ny, Ny, contrast):
     f.interpolate(lambda x: np.full(x.shape[1],  1.0)) 
 
     # Coeff in PDE
-    coeff_A_function = lambda x : 1.0 + (contrast - 1) * channel(x[0], x[1], ny, Ny)
+    coeff_A_function = lambda x : 1.0 + (contrast - 1) * channel_grid_pattern(x[0], x[1], ny, Ny)
 
     return dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function
 
@@ -138,7 +138,7 @@ def on_box(x_midpoint, y_midpoint, sidelength, h, layers, x, y):
         np.abs(y-y_midpoint) < (sidelength - h * layers)/2
     )
 
-def channel(x,y, ny, N):
+def channel_grid_pattern(x,y, ny, N):
     # Take the unit channel from below and repeat it in the four quadrants
     # N = 4
     on_channel = np.full(x.shape, False)
@@ -367,6 +367,164 @@ def skyscraper(x,y):
     
     return value
 
+def channel(x, parameters):
+    """
+    Global channel coefficient on the unit square [0, 1] x [0, 1].
+
+    The unit square is partitioned into 4 x 4 = 16 equal square subdomains
+    of side length ``1/4``. One rectangular channel is placed inside every
+    subdomain. Each channel has the same fixed geometry:
+
+        - width  (x-extent) = side / 10 = 1/40
+        - height (y-extent) = side / 2  = 1/8
+
+    The channel of subdomain ``k`` is offset from the lower-left corner of
+    that subdomain by ``(cx_k, cy_k)`` and its coefficient value on the
+    channel is ``h_k``.  Away from every channel the function returns the
+    fixed background value ``0.1``.
+
+    To guarantee that no channel intersects the global boundary or the
+    interfaces between subdomains, the offsets must satisfy
+    ``0 < cx_k < side - width`` and ``0 < cy_k < side - height``.
+
+    Parameters
+    ----------
+    x : array-like, shape (2, num_gridpoints)
+        Spatial coordinates; ``x[0]`` are x-coords, ``x[1]`` are y-coords.
+    parameters : array-like, shape (3 * 16,) = (48,)
+        Concatenated parameters of the 16 channels. Subdomains are indexed
+        in row-major order ``k = i * 4 + j`` with ``i`` the column index
+        (x-direction) and ``j`` the row index (y-direction).  For every
+        subdomain ``k``:
+
+            parameters[3*k]     = cx_k   (x-offset from subdomain corner)
+            parameters[3*k + 1] = cy_k   (y-offset from subdomain corner)
+            parameters[3*k + 2] = h_k    (channel value / contrast)
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        Coefficient field (``0.1`` outside every channel, ``h_k`` inside the
+        channel of subdomain ``k``).
+    """
+    N = 4
+    side = 1.0 / N
+    width_channel = side / 10.0
+    high_channel = side / 2.0
+
+    parameters = np.asarray(parameters).ravel()
+    if parameters.size != 3 * N * N:
+        raise ValueError(
+            f"channel expects {3 * N * N} parameters (3 per each of the "
+            f"{N * N} subdomains); got {parameters.size}."
+        )
+
+    background = 0.1
+    value = np.full(x.shape[1], background)
+    for i in range(N):
+        for j in range(N):
+            k = i * N + j
+            x0 = i * side
+            y0 = j * side
+            channel_x0 = parameters[3 * k]
+            channel_y0 = parameters[3 * k + 1]
+            height = parameters[3 * k + 2]
+
+            on_channel = np.logical_and(
+                np.logical_and(x[0] >= x0 + channel_x0,
+                               x[0] <= x0 + channel_x0 + width_channel),
+                np.logical_and(x[1] >= y0 + channel_y0,
+                               x[1] <= y0 + channel_y0 + high_channel),
+            )
+            value = np.where(on_channel, height, value)
+    return value
+
+
+def channel_rotated(x, parameters):
+    """
+    Global rotated-channel coefficient on the unit square [0, 1] x [0, 1].
+
+    Identical to :func:`channel` but every channel additionally carries a
+    rotation angle. The unit square is partitioned into 4 x 4 = 16 equal
+    square subdomains of side length ``1/4`` and one rectangular channel is
+    placed inside every subdomain. Each channel has the same fixed geometry:
+
+        - width  (short axis) = side / 10 = 1/40
+        - height (main axis)  = side / 2  = 1/8
+
+    The channel of subdomain ``k`` is offset from the lower-left corner of
+    that subdomain by ``(cx_k, cy_k)``, its coefficient value on the channel
+    is ``h_k`` and it is rotated about its own center by ``theta_k`` (its
+    main/long axis is rotated by that angle).  Away from every channel the
+    function returns the fixed background value ``0.1``.
+
+    Parameters
+    ----------
+    x : array-like, shape (2, num_gridpoints)
+        Spatial coordinates; ``x[0]`` are x-coords, ``x[1]`` are y-coords.
+    parameters : array-like, shape (4 * 16,) = (64,)
+        Concatenated parameters of the 16 channels. Subdomains are indexed
+        in row-major order ``k = i * 4 + j`` with ``i`` the column index
+        (x-direction) and ``j`` the row index (y-direction).  For every
+        subdomain ``k``:
+
+            parameters[4*k]     = cx_k     (x-offset from subdomain corner)
+            parameters[4*k + 1] = cy_k     (y-offset from subdomain corner)
+            parameters[4*k + 2] = h_k      (channel value / contrast)
+            parameters[4*k + 3] = theta_k  (rotation angle in [0, 2*pi])
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        Coefficient field (``0.1`` outside every channel, ``h_k`` inside the
+        rotated channel of subdomain ``k``).
+    """
+    N = 4
+    side = 1.0 / N
+    width_channel = side / 10.0
+    high_channel = side / 2.0
+
+    parameters = np.asarray(parameters).ravel()
+    if parameters.size != 4 * N * N:
+        raise ValueError(
+            f"channel_rotated expects {4 * N * N} parameters (4 per each of "
+            f"the {N * N} subdomains); got {parameters.size}."
+        )
+
+    background = 0.1
+    value = np.full(x.shape[1], background)
+    for i in range(N):
+        for j in range(N):
+            k = i * N + j
+            x0 = i * side
+            y0 = j * side
+            channel_x0 = parameters[4 * k]
+            channel_y0 = parameters[4 * k + 1]
+            height = parameters[4 * k + 2]
+            theta = parameters[4 * k + 3]
+
+            # Center of the (un-rotated) channel; used as center of rotation.
+            center_x = x0 + channel_x0 + width_channel / 2.0
+            center_y = y0 + channel_y0 + high_channel / 2.0
+
+            # Translate the point so the channel center is at the origin and
+            # apply the inverse rotation to map it into the channel's own
+            # (axis-aligned) coordinate frame.
+            x_translated = x[0] - center_x
+            y_translated = x[1] - center_y
+            cos_theta = np.cos(-theta)
+            sin_theta = np.sin(-theta)
+            x_unrotated = x_translated * cos_theta - y_translated * sin_theta
+            y_unrotated = x_translated * sin_theta + y_translated * cos_theta
+
+            on_channel = np.logical_and(
+                np.abs(x_unrotated) <= width_channel / 2.0,
+                np.abs(y_unrotated) <= high_channel / 2.0,
+            )
+            value = np.where(on_channel, height, value)
+    return value
+
+
 def channel_sub_dom_five(x, parameters):
     """
     Channel configuration for subdomain five. Works only for subdomains that come from a regular 4x4 partition of the global domain
@@ -482,6 +640,60 @@ def channel_smooth(x, parameters, sharpness=100):
     bump_x = 1 / (1 + np.exp(-sharpness * (x[0] - left[0]))) - 1 / (1 + np.exp(-sharpness * (x[0] - right[0])))
     bump_y = 1 / (1 + np.exp(-sharpness * (x[1] - left[1]))) - 1 / (1 + np.exp(-sharpness * (x[1] - right[1])))
     return height * bump_x * bump_y
+
+
+def multiscale_sincos(x, parameters, background=0.1):
+    """
+    Positive, globally defined multiscale coefficient on [0, 1] x [0, 1].
+
+    The coefficient is the exponential of a truncated sine-cosine (Fourier)
+    expansion. Taking the exponential guarantees strict positivity for *any*
+    parameter values, while the individual modes set the oscillation
+    frequencies and amplitudes of the field:
+
+        g(x, y) = sum_k [ a_k * sin(2*pi*(kx_k*x + ky_k*y))
+                          + b_k * cos(2*pi*(kx_k*x + ky_k*y)) ]
+        A(x, y) = background + exp(g(x, y))
+
+    A wide spread of the frequencies ``(kx_k, ky_k)`` (coarse and fine modes)
+    makes the coefficient genuinely multiscale. The constant ``background``
+    provides a guaranteed positive lower bound independent of the amplitudes.
+
+    Parameters
+    ----------
+    x : array-like, shape (2, num_gridpoints)
+        Spatial coordinates; ``x[0]`` are x-coords, ``x[1]`` are y-coords.
+    parameters : array-like, shape (4 * K,)
+        Concatenated parameters of the ``K`` Fourier modes. For every mode
+        ``k``:
+
+            parameters[4*k]     = kx_k   (x-frequency, number of oscillations)
+            parameters[4*k + 1] = ky_k   (y-frequency, number of oscillations)
+            parameters[4*k + 2] = a_k    (sine amplitude)
+            parameters[4*k + 3] = b_k    (cosine amplitude)
+    background : float, optional
+        Positive constant added to ``exp(g)``. Default is ``0.1``.
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        The strictly positive coefficient field evaluated at ``x``.
+    """
+    p = np.asarray(parameters).ravel()
+    if p.size % 4 != 0:
+        raise ValueError(
+            "multiscale_sincos expects 4 parameters per mode "
+            f"(kx, ky, a, b); got {p.size} which is not divisible by 4."
+        )
+    K = p.size // 4
+
+    g = np.zeros(x.shape[1])
+    for k in range(K):
+        kx, ky, a, b = p[4 * k: 4 * k + 4]
+        phase = 2.0 * np.pi * (kx * x[0] + ky * x[1])
+        g = g + a * np.sin(phase) + b * np.cos(phase)
+
+    return background + np.exp(g)
 
 # Standalone functions
 def crosspoint_1d(x):
@@ -617,21 +829,29 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
         
         # Define the Dirichlet boundary condition
         u_D = Function(V)
+        # TODO: return correct dirichlet boundary for later global solve.
         # Define the Robin boundary condition
         u_R = Function(V)
         u_R.interpolate(lambda x: np.full(x.shape[1], 0.0)) 
 
         # Define source term
+        # TODO: think of meaningful source term.
         f = Function(V)
         x0, y0 = 0.7, 0.9
         f.interpolate(lambda x: np.exp(-((x[0] - x0)**2 + (x[1] - y0)**2) ))
         # coeff in PDE
         if store_tag == 'channel_coeff':
-            coeff_A_function = lambda x : 1 + channel_sub_dom_five(x, parameters)
+            coeff_A_function = lambda x : channel(x, parameters)
+        elif store_tag == 'channel_rotated_coeff':
+            coeff_A_function = lambda x : channel_rotated(x, parameters)
+        elif store_tag == 'channel_sub_dom_five_coeff':
+            coeff_A_function = lambda x : 1 +  channel_sub_dom_five(x, parameters)
         elif store_tag == 'sinus_coeff':
             coeff_A_function = lambda x : np.exp(np.sin(parameters[0]*np.pi*x[0]) + np.sin(parameters[1]*np.pi*x[1]))# highly oszillating
+        elif store_tag == 'multiscale_sincos_coeff':
+            coeff_A_function = lambda x : multiscale_sincos(x, parameters)
         elif store_tag == 'channel_low_coeff':
-            coeff_A_function = lambda x : 1 + channel_sub_dom_five(x, parameters)
+            coeff_A_function = lambda x : channel(x, parameters)
         elif (store_tag == 'channel_smooth_coeff') or (store_tag == 'channel_low_smooth_coeff'):
             coeff_A_function = lambda x : 1 + channel_smooth(x, parameters)
         elif store_tag == 'crosspoint_1d_coeff':
@@ -652,30 +872,3 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
 
         return dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function
 
-def random_lines_msgfem(xL, yL, xR, yR, V, msh, parameters):
-        
-        def robin_boundary(x):
-            bool_tmp = np.isclose(x[1], -1)
-            return bool_tmp
-
-        def dirichlet_boundary(x):
-            bool_tmp = np.logical_or(np.isclose(x[0], xL), np.isclose(x[0], xR))
-            bool_tmp = np.logical_or(bool_tmp, np.isclose(x[1], yR))
-            bool_tmp = np.logical_or(bool_tmp, np.isclose(x[1], yL))
-            
-            bool_tmp = np.logical_and(bool_tmp, np.logical_not(robin_boundary(x)))   # Make sure that the point is not on the robin boundary, because we want to have disjoint boundary sets
-            return bool_tmp
-        
-        # Define the Dirichlet boundary condition
-        u_D = Function(V)
-        # Define the Robin boundary condition
-        u_R = Function(V)
-        u_R.interpolate(lambda x: np.full(x.shape[1], 0.0)) 
-
-        # Define source term
-        f = Function(V)
-        x0, y0 = 0.7, 0.9
-        f.interpolate(lambda x: np.exp(-((x[0] - x0)**2 + (x[1] - y0)**2) ))
-        coeff_A_function = lambda x : random_lines(x, parameters)
-
-        return dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function

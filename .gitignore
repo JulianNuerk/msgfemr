@@ -7,4 +7,6 @@ out_functions/
 __pycache__/
 settings.json
 requirements.yaml
-
+.vscode/
+errors/
+.gitignore

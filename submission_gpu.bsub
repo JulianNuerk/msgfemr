@@ -1,5 +1,6 @@
 #!/bin/bash -l
 #BSUB -J msgfem_FNO_data_gen[1-3]                         # Job array spanning 3 tasks
+#BSUB -P BH-000543
 #BSUB -o cluster_job_info/msgfem_FNO.%J.%I.stdout         # %J is Job ID, %I is array index
 #BSUB -e cluster_job_info/msgfem_FNO.%J.%I.stderr
 #BSUB -q batch_b200                                             # Use B200 node queue (adjust queue name if needed)

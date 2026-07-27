@@ -1,13 +1,13 @@
 #!/bin/bash -l
-#BSUB -J msgfem_FNO_data_gen[1]                         # Job array spanning 1 task
+#BSUB -J msgfem_FNO_data_gen[1-3]                       # One array task per entry in TAGS (update range to match len(TAGS))
 #BSUB -P BH-000543
 #BSUB -o cluster_job_info/test_msgfem_FNO.%J.%I.stdout         
 #BSUB -e cluster_job_info/test_msgfem_FNO.%J.%I.stderr
 #BSUB -q batch_cpu                                     # Dedicated CPU queue
-#BSUB -W 8:00                                            # Wallclock time (Update after test)
-#BSUB -n 4                                                # CPU cores per task (Update after test)
+#BSUB -W 4:00                                            # Wallclock time (~40-50 min compute for 10000 samples + margin)
+#BSUB -n 24                                               # CPU cores per task = number of Ray workers; set >= len(subdom_idx_list) in ex_FNO.py
 #BSUB -R "span[hosts=1]"                                  # Ensure cores are on the same host
-#BSUB -R "rusage[mem=4G]"                                # RAM allocation (Update after test)
+#BSUB -R "rusage[mem=1G]"                                # Per-slot RAM (peak ~7.2G total across the -n workers; streaming so independent of num_samples)
 
 # Load modules (removed CUDA since it's CPU only)
 module purge
@@ -17,12 +17,16 @@ vEnv=msgfemr
 mamba activate $vEnv
 
 # Define the array of parameters to loop through
-TAGS=("bubble_coeff")
+TAGS=("channel_coeff" "channel_rotated_coeff" "multiscale_sincos_coeff")
+
+# Subdomain indices solved in parallel per sample (space separated).
+# Keep len(SUBDOM_IDX_LIST) <= the -n cores requested above.
+SUBDOM_IDX_LIST="0 1 3 4 5 11 12 14 15"
 
 CURRENT_TAG=${TAGS[$LSB_JOBINDEX - 1]}
 
 echo "Starting CPU-only job on host: $HOSTNAME"
-echo "Running ex_FNO.py with store_tag = $CURRENT_TAG and num_samples = 120000"
+echo "Running ex_FNO.py with store_tag = $CURRENT_TAG and num_samples = 10000"
 
 # Run the python script
-python ex_FNO.py --store_tag $CURRENT_TAG --num_samples 120000
+python ex_FNO.py --store_tag $CURRENT_TAG --num_samples 10000 --subdom_idx_list $SUBDOM_IDX_LIST

@@ -33,16 +33,25 @@ parser.add_argument("--num_samples", type=int, default=1200, help="Number of sam
 parser.add_argument("--nloc", type=int, default=5, help="Number of local basis functions")
 parser.add_argument("--subdom_idx_list", type=int, nargs="+", default=[5, 6, 9, 10],
                     help="Subdomain indices whose eigenproblems are solved in parallel per sample")
+parser.add_argument("--param_indices", type=int, nargs="+", default=None,
+                    help="Rerun only these sample indices, taking the parameters from the "
+                         "stored input_paras file instead of drawing new ones")
 
 args = parser.parse_args()
 # Set store_tag from the command line argument
 store_tag = args.store_tag
 num_samples = args.num_samples
 nloc = args.nloc 
+param_indices = args.param_indices
 
 # Define the absolute path to your target scratch directory
 BASE_DIR = Path("/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/fenics_out_data")
-OUT_DIR = BASE_DIR / store_tag / f"samples_{num_samples}"
+IN_DIR = BASE_DIR / store_tag / f"samples_{num_samples}"
+OUT_DIR = (
+    BASE_DIR / store_tag / f"samples_{num_samples}_from_parameter"
+    if param_indices is not None
+    else IN_DIR
+)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # no need to play with but can be changed
@@ -139,27 +148,24 @@ elif store_tag == 'random_lines':
     angles  = np.random.uniform(0, np.pi, (num_samples, num_lines, 1))  
     parameters = np.concatenate([centers, lengths, angles], axis=2).reshape(num_samples, num_lines * 4) 
 elif store_tag == 'bubble_coeff':
-    # Five circular bubbles per sample confined to the square subdomain
-    # [x0, y1] x [x0, y1]. Layout of the parameter vector per sample:
-    #   [x0, y1, cx_1, cy_1, r_1, h_1, ..., cx_5, cy_5, r_5, h_5]
-    num_bubbles = 5
-    side = y1 - x0                          # subdomain side length
-    r_min = side / 50                       # minimum bubble radius
-    r_max = side / 6                        # keeps bubbles well inside subdomain
-    h_min = 1.0                             # minimum bubble height (contrast)
-    h_max = 100.0                           # maximum bubble height (contrast)
+    # One circular bubble per subdomain of the 4x4 global partition.
+    # The parameter vector is laid out as (cx_local, cy_local, radius, height)
+    # for each of the 16 subdomains, in row-major order.
+    N_sub = 4
+    side = 1.0 / N_sub
+    r_min = side / 50.0                    # minimum radius inside each subdomain
+    r_max = side / 4.0                     # keeps the bubble away from the edges
+    h_min = 1.0                            # minimum bubble value
+    h_max = 1_000.0                        # maximum bubble value
 
-    parameters = np.zeros((num_samples, 2 + num_bubbles * 4))
-    parameters[:, 0] = x0
-    parameters[:, 1] = y1
+    parameters = np.zeros((num_samples, 4 * N_sub * N_sub))
     for s in range(num_samples):
-        for b in range(num_bubbles):
-            r  = np.random.uniform(r_min, r_max)
-            # Sample center so the whole disk lies strictly inside the subdomain
-            cx = np.random.uniform(x0 + r + eps, y1 - r - eps)
-            cy = np.random.uniform(x0 + r + eps, y1 - r - eps)
-            h  = np.random.uniform(h_min, h_max)
-            parameters[s, 2 + 4 * b: 2 + 4 * (b + 1)] = [cx, cy, r, h]
+        for b in range(N_sub * N_sub):
+            r = np.random.uniform(r_min, r_max)
+            cx_local = np.random.uniform(r + eps, side - r - eps)
+            cy_local = np.random.uniform(r + eps, side - r - eps)
+            h = np.random.uniform(h_min, h_max)
+            parameters[s, 4 * b: 4 * (b + 1)] = [cx_local, cy_local, r, h]
 elif store_tag == 'rotated_channel_coeff':
     p0_bound = 9/10*(y1-x0) - eps 
     p1_bound = 1/2*(y1-x0) - eps 
@@ -172,6 +178,23 @@ elif store_tag == 'kl_coeff':
     parameters = np.random.normal(size=(num_samples, L))
 else:
     raise ValueError('store_tag %s not defined!'%(store_tag))
+
+if param_indices is None:
+    sample_indices = list(range(len(parameters)))
+else:
+    param_path = IN_DIR / f"input_paras_num_samples_{num_samples}_nloc_{nloc}.npy"
+    if not param_path.exists():
+        raise FileNotFoundError(f"No stored parameters at {param_path}")
+    stored_parameters = np.load(param_path)
+    out_of_range = [i for i in param_indices if not 0 <= i < stored_parameters.shape[0]]
+    if out_of_range:
+        raise ValueError(
+            f"param_indices {out_of_range} out of range for {stored_parameters.shape[0]} "
+            f"stored samples in {param_path}"
+        )
+    sample_indices = list(param_indices)
+    parameters = stored_parameters[sample_indices]
+    print(f"Loaded {len(sample_indices)} parameter samples from {param_path}")
 
 print('Starting data generation for case: %s'%(store_tag))
 
@@ -197,11 +220,11 @@ def generate_sample_subdom(sample_idx, parameter, subdom_idx):
      input_indices, eig_solve_time) = ed.run_fno_data_generation(
         deg, Ny, ny, ol, os, nloc, rho, store_tag, parameter, subdom_idx)
 
-    np.save(OUT_DIR / f"phi_sub_dom_{subdom_idx}_sample_{sample_idx}.npy", basis_funs)
-    np.save(OUT_DIR / f"coeff_A_sub_dom_{subdom_idx}_sample_{sample_idx}.npy", coeff_A_FNO)
-    np.save(OUT_DIR / f"eig_vals_sub_dom_{subdom_idx}_sample_{sample_idx}.npy", eig_vals)
-    np.save(OUT_DIR / f"vecs_tmp_sub_dom_{subdom_idx}_sample_{sample_idx}.npy", vecs_tmp)
-    np.save(OUT_DIR / f"indices_for_reshape_2d_sub_dom_{subdom_idx}.npy", input_indices)
+    np.save(OUT_DIR / f"phi_sub_dom_{subdom_idx}_sample_{sample_idx}_nloc_{nloc}.npy", basis_funs)
+    np.save(OUT_DIR / f"coeff_A_sub_dom_{subdom_idx}_sample_{sample_idx}_nloc_{nloc}.npy", coeff_A_FNO)
+    np.save(OUT_DIR / f"eig_vals_sub_dom_{subdom_idx}_sample_{sample_idx}_nloc_{nloc}.npy", eig_vals)
+    np.save(OUT_DIR / f"vecs_tmp_sub_dom_{subdom_idx}_sample_{sample_idx}_nloc_{nloc}.npy", vecs_tmp)
+    np.save(OUT_DIR / f"indices_for_reshape_2d_sub_dom_{subdom_idx}_nloc_{nloc}.npy", input_indices)
 
     return sample_idx, subdom_idx, eig_solve_time
 
@@ -211,12 +234,14 @@ def generate_sample_subdom(sample_idx, parameter, subdom_idx):
 # combination up front lets Ray keep all allocated cores busy across samples.
 futures = [
     generate_sample_subdom.remote(idx, parameter, subdom_idx)
-    for idx, parameter in enumerate(parameters)
+    for idx, parameter in zip(sample_indices, parameters)
     for subdom_idx in subdom_idx_list
 ]
 
 # Collect eigsh solve times per subdomain as the tasks complete.
-eig_solve_times = {subdom_idx: np.zeros(num_samples) for subdom_idx in subdom_idx_list}
+eig_solve_times = {
+    subdom_idx: np.full(max(sample_indices) + 1, np.nan) for subdom_idx in subdom_idx_list
+}
 remaining = futures
 while remaining:
     done, remaining = ray.wait(remaining, num_returns=1)
@@ -226,13 +251,16 @@ while remaining:
           f"(eigsh time {eig_solve_time:.4f} s)", flush=True)
 
 for subdom_idx in subdom_idx_list:
-    np.save(OUT_DIR / f"eig_solve_times_sub_dom_{subdom_idx}.npy",
+    np.save(OUT_DIR / f"eig_solve_times_sub_dom_{subdom_idx}_nloc_{nloc}.npy",
             eig_solve_times[subdom_idx])
 
-if store_tag == "crosspoint_1d_coeff":
-    np.save(OUT_DIR / f"input_paras_num_samples_{num_samples}.npy", parameters[:,0])
+if param_indices is not None:
+    np.save(OUT_DIR / f"sample_indices_nloc_{nloc}.npy", np.asarray(sample_indices))
+    np.save(OUT_DIR / f"input_paras_selected_nloc_{nloc}.npy", parameters)
+elif store_tag == "crosspoint_1d_coeff":
+    np.save(OUT_DIR / f"input_paras_num_samples_{num_samples}_nloc_{nloc}.npy", parameters[:,0])
 else:
-    np.save(OUT_DIR / f"input_paras_num_samples_{num_samples}.npy", parameters)
+    np.save(OUT_DIR / f"input_paras_num_samples_{num_samples}_nloc_{nloc}.npy", parameters)
         
 print('FNO data generation completed!')
 ray.shutdown()

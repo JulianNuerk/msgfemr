@@ -16,12 +16,15 @@ generated in ex_FNO.py) this module
 * returns the three relative energy errors
   ``err(uG, uh)``, ``err(uG_pred, uh)`` and ``err(uG_pred, uG)``,
 * stores XDMF visualisations of ``uh``, ``uG`` and ``uG_pred`` under
-  ``plots/overall_preds/<store_tag>/``.
+  ``plots/overall_predictions/<store_tag>/``.
 
 Predictions are passed as a ``dict[int, np.ndarray]`` (``predictions_data``)
 mapping a subdomain index to a tensor of shape
 ``(num_samples, k, nx_sub+1, ny_sub+1)``.  The set of covered subdomains is
-thus simply ``predictions_data.keys()``.
+thus simply ``predictions_data.keys()``.  On the command line the predictions
+are read from a *directory* holding one ``sub_dom_<idx>.npz`` file per
+subdomain (key ``pred``); subdomains without such a file fall back to the
+eigsolve.
 
 The mesh / MS-GFEM parameters (``deg``, ``Ny``, ``ny``, ``ol``, ``os``,
 ``nloc``, ``rho``, ``bool_ring``) default to the values used in
@@ -29,13 +32,28 @@ The mesh / MS-GFEM parameters (``deg``, ``Ny``, ``ny``, ``ol``, ``os``,
 without further tuning.
 """
 
+import os
+
+# Every Ray task below requests a single CPU, so the linear-algebra backends
+# must not spawn several threads per task (this has to happen before numpy /
+# dolfinx are imported).
+for _thread_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+):
+    os.environ.setdefault(_thread_var, "1")
+
 from mpi4py import MPI
 from petsc4py import PETSc
-
-import os
+import re
 import time
+from pathlib import Path
 
 import numpy as np
+import ray
 from dolfinx.fem import Function, functionspace, locate_dofs_geometrical, dirichletbc
 from dolfinx.io import XDMFFile
 from dolfinx.mesh import create_rectangle, CellType
@@ -44,6 +62,39 @@ import msgfem_parallel as msgfem
 import helper
 import preconditioner as pre
 import setup
+
+
+@ray.remote(num_cpus=1)
+def _compute_subdomain_remote(params, coord_global):
+    """Ray wrapper around :func:`msgfem_parallel.computeSubdomain`.
+
+    ``coord_global`` is passed separately (as a shared object-store reference)
+    so that the large coordinate array is serialised only once instead of once
+    per task; it is re-inserted at its position in the parameter list.
+    """
+    params = list(params)
+    params[15] = coord_global
+    return msgfem.computeSubdomain(params)
+
+
+_coord_global_ref = None
+
+
+def _get_coord_global_ref(coord_global):
+    global _coord_global_ref
+    if _coord_global_ref is None:
+        _coord_global_ref = ray.put(coord_global)
+    return _coord_global_ref
+
+
+def _init_ray():
+    """Initialise Ray with the cores allocated by LSF (batch_cpu queue)."""
+    if ray.is_initialized():
+        return
+    num_cpus_env = os.environ.get("LSB_DJOB_NUMPROC")
+    ray.init(num_cpus=int(num_cpus_env) if num_cpus_env else None,
+             ignore_reinit_error=True)
+    print(f"Ray initialised with resources: {ray.cluster_resources()}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -62,42 +113,61 @@ class _GfemPreconditionerWithPredictions(pre.GfemPreconditioner):
     All other subdomains fall back to the standard eigsolve.
     """
 
-    def __init__(self, pc, data, predictions_sample=None,
+    def __init__(self, pc, data, predictions_sample=None, base_local_data=None,
                  perturbation_parameter=0.0):
         super().__init__(pc, data, perturbation_parameter)
         self.predictions_sample = predictions_sample if predictions_sample is not None else {}
+        # When given, only the subdomains carrying a prediction are recomputed
+        # and all remaining entries are taken from this (eigsolve) result.
+        self.base_local_data = base_local_data
+        self.local_data = None
+
+    def _subdomain_params(self, i_subdom):
+        params = [
+            self.xR,
+            self.xL,
+            self.yR,
+            self.yL,
+            self.ol,
+            self.os,
+            self.Nx,
+            self.Ny,
+            self.nx,
+            self.ny,
+            self.nDom,
+            self.coeff,
+            self.deg,
+            self.nloc,
+            i_subdom,
+            None,  # coord_global, filled in inside the Ray task
+            self.dirichlet_boundary,
+            self.robin_boundary,
+            self.perturbation_parameter,
+            self.rho,
+            self.bool_ring,
+        ]
+        if i_subdom in self.predictions_sample:
+            params.append(self.predictions_sample[i_subdom])
+        return params
 
     def setUp(self, pc):
         start = time.time()
 
-        local_data = []
-        for i_subdom in range(self.nDom):
-            params = [
-                self.xR,
-                self.xL,
-                self.yR,
-                self.yL,
-                self.ol,
-                self.os,
-                self.Nx,
-                self.Ny,
-                self.nx,
-                self.ny,
-                self.nDom,
-                self.coeff,
-                self.deg,
-                self.nloc,
-                i_subdom,
-                self.coord_global,
-                self.dirichlet_boundary,
-                self.robin_boundary,
-                self.perturbation_parameter,
-                self.rho,
-                self.bool_ring,
-            ]
-            if i_subdom in self.predictions_sample:
-                params.append(self.predictions_sample[i_subdom])
-            local_data.append(msgfem.computeSubdomain(params))
+        if self.base_local_data is None:
+            local_data = [None] * self.nDom
+            todo = list(range(self.nDom))
+        else:
+            local_data = list(self.base_local_data)
+            todo = sorted(self.predictions_sample)
+
+        # One Ray task per subdomain -> all subdomains are computed in parallel
+        # on the cores allocated to the batch_cpu job.
+        coord_ref = _get_coord_global_ref(self.coord_global)
+        futures = [_compute_subdomain_remote.remote(self._subdomain_params(i), coord_ref)
+                   for i in todo]
+        for i_subdom, result in zip(todo, ray.get(futures)):
+            local_data[i_subdom] = result
+        self.local_data = local_data
 
         nloc_cutoff = np.zeros(self.nDom)
         for i in range(self.nDom):
@@ -169,13 +239,15 @@ def _compute_uG(V, msh, coeff_A_function, coeff_A, u_D, f,
                 dirichlet_boundary, robin_boundary,
                 deg, Nx, Ny, nx, ny, nDom, ol, os_, nloc, rho, bool_ring,
                 xL, yL, xR, yR, coord_global,
-                predictions_sample=None):
+                predictions_sample=None, base_local_data=None):
     """Assemble the MS-GFEM problem and evaluate the non-iterative multiscale
-    solution using ``pc.apply``.  When ``predictions_sample`` (a
+    solution using ``pc.apply``.  ``predictions_sample`` is a
     ``dict[int, np.ndarray]`` mapping subdomain index to a
-    ``(k, nx_sub+1, ny_sub+1)`` tensor) is provided and non-empty the
-    :class:`_GfemPreconditionerWithPredictions` is used, otherwise the plain
-    :class:`preconditioner.GfemPreconditioner`.
+    ``(k, nx_sub+1, ny_sub+1)`` tensor replacing the local eigsolve; passing
+    ``base_local_data`` (the per-subdomain result of a previous eigsolve run)
+    restricts the recomputation to exactly those predicted subdomains.
+
+    Returns ``(uG, local_data)``.
     """
     # Boundary conditions and forms
     dirichlet_dofs_global = locate_dofs_geometrical(V, dirichlet_boundary)
@@ -198,12 +270,10 @@ def _compute_uG(V, msh, coeff_A_function, coeff_A, u_D, f,
         dirichlet_boundary, robin_boundary, A_scipy, rho, bool_ring,
     )
 
-    if not predictions_sample:
-        gfem_pre = pre.GfemPreconditioner(pc, data)
-    else:
-        gfem_pre = _GfemPreconditionerWithPredictions(
-            pc, data, predictions_sample=predictions_sample,
-        )
+    gfem_pre = _GfemPreconditionerWithPredictions(
+        pc, data, predictions_sample=predictions_sample,
+        base_local_data=base_local_data,
+    )
     pc.setPythonContext(gfem_pre)
 
     # Non-iterative multiscale solution (single application of the PC to the RHS)
@@ -212,7 +282,7 @@ def _compute_uG(V, msh, coeff_A_function, coeff_A, u_D, f,
     pc.apply(b_tmp, uG_vec)
     uG.vector.array[:] = uG_vec.array
 
-    return uG
+    return uG, gfem_pre.local_data
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +290,7 @@ def _compute_uG(V, msh, coeff_A_function, coeff_A, u_D, f,
 # ---------------------------------------------------------------------------
 def compute_overall_errors(store_tag, parameters, predictions_data,
                            deg=1, Ny=4, ny=2 ** 8, ol=2, os_=2, nloc=5,
-                           rho=0.0, bool_ring=False, plot=True,
+                           rho=0.0, bool_ring=False,
                            plot_root="plots/overall_predictions"):
     """Evaluate the effect of network-predicted local bases on the overall
     MS-GFEM solution for every sample in ``parameters``.
@@ -243,11 +313,9 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
         differ.
     deg, Ny, ny, ol, os_, nloc, rho, bool_ring
         MS-GFEM configuration; the defaults match ``ex_FNO.py``.
-    plot : bool, optional
-        When ``True`` (default) ``uh``, ``uG`` and ``uG_pred`` are written to
-        XDMF files under ``plot_root/<store_tag>/``.
     plot_root : str, optional
-        Base directory for the visualisation output.
+        Base directory for the XDMF visualisations of ``uh``, ``uG`` and
+        ``uG_pred``, which are always written to ``plot_root/<store_tag>/``.
 
     Returns
     -------
@@ -264,6 +332,8 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
     if parameters.ndim == 1:
         parameters = parameters[None, :]
     num_samples = parameters.shape[0]
+
+    _init_ray()
 
     if not isinstance(predictions_data, dict):
         raise TypeError(
@@ -307,6 +377,8 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
     err_uG_vs_uh = np.zeros(num_samples)
     err_uG_pred_vs_uh = np.zeros(num_samples)
     err_uG_pred_vs_uG = np.zeros(num_samples)
+    err_uG_pred_vs_uh_rel_L2 = np.zeros(num_samples)
+    err_uG_pred_vs_uh_rel_H1 = np.zeros(num_samples)
 
     plot_dir = os.path.join(plot_root, store_tag)
 
@@ -328,7 +400,7 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
          ) = _build_coeff_A_function(store_tag, parameter_row,
                                      xL, yL, xR, yR, V, msh)
 
-        coeff_A = Function(functionspace(msh, ("DG", 0)))
+        coeff_A = Function(functionspace(msh, ("Lagrange", deg)))
         coeff_A.interpolate(coeff_A_function)
 
         # Fine reference solution uh
@@ -340,7 +412,7 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
         print('Done computing uh!')
         # Classical MS-GFEM solution (all subdomains via eigsolve)
         print('Compute uG')
-        uG = _compute_uG(
+        uG, local_data_eig = _compute_uG(
             V, msh, coeff_A_function, coeff_A, u_D, f,
             dirichlet_boundary, robin_boundary,
             deg, Nx, Ny, nx, ny, nDom, ol, os_, nloc, rho, bool_ring,
@@ -349,39 +421,45 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
         )
         print('Done computing uG!')
 
-        # Hybrid MS-GFEM solution (predictions where available, eigsolves elsewhere)
+        # Hybrid MS-GFEM solution: only the predicted subdomains are rebuilt,
+        # every other subdomain reuses the eigsolve result of uG.
         print('Compute uG_pred')
-        uG_pred = _compute_uG(
+        uG_pred, _ = _compute_uG(
             V, msh, coeff_A_function, coeff_A, u_D, f,
             dirichlet_boundary, robin_boundary,
             deg, Nx, Ny, nx, ny, nDom, ol, os_, nloc, rho, bool_ring,
             xL, yL, xR, yR, coord_global,
             predictions_sample=predictions_sample,
+            base_local_data=local_data_eig,
         )
         print('Done computing uG_pred!')
 
-        # Three relative energy errors
+        # Three relative energy errors and classic L2, H1 errors 
         err_uG_vs_uh[sample_idx] = helper.compute_errors(uG, uh, msh, coeff_A)
         err_uG_pred_vs_uh[sample_idx] = helper.compute_errors(uG_pred, uh, msh, coeff_A)
         err_uG_pred_vs_uG[sample_idx] = helper.compute_errors(uG_pred, uG, msh, coeff_A)
+        err_uG_pred_vs_uh_rel_L2[sample_idx] = helper.compute_rel_L2(uG_pred, uh, msh)
+        err_uG_pred_vs_uh_rel_H1[sample_idx] = helper.compute_rel_H1(uG_pred, uh, msh)
+
 
         print(
             f"sample {sample_idx}: "
             f"err(uG,uh)={err_uG_vs_uh[sample_idx]:.4e}, "
             f"err(uG_pred,uh)={err_uG_pred_vs_uh[sample_idx]:.4e}, "
             f"err(uG_pred,uG)={err_uG_pred_vs_uG[sample_idx]:.4e}",
+            f"err(uG_pred,uh)_rel_L2={err_uG_pred_vs_uh_rel_L2[sample_idx]:.4e}, "
+            f"err(uG_pred,uh)_rel_H1={err_uG_pred_vs_uh_rel_H1[sample_idx]:.4e}",
             flush=True,
         )
 
-        if plot:
-            _plot_to_path(uh,     msh, os.path.join(plot_dir, f"uh_sample_{sample_idx}"))
-            _plot_to_path(uG,     msh, os.path.join(plot_dir, f"uG_sample_{sample_idx}"))
-            _plot_to_path(uG_pred, msh, os.path.join(plot_dir, f"uG_pred_sample_{sample_idx}"))
+        _plot_to_path(uh,      msh, os.path.join(plot_dir, f"uh_sample_{sample_idx}"))
+        _plot_to_path(uG,      msh, os.path.join(plot_dir, f"uG_sample_{sample_idx}"))
+        _plot_to_path(uG_pred, msh, os.path.join(plot_dir, f"uG_pred_sample_{sample_idx}"))
 
-            # Absolute prediction error field |uG - uG_pred|
-            u_abs_err = Function(V)
-            u_abs_err.vector.array[:] = np.abs(uG.vector.array - uG_pred.vector.array)
-            _plot_to_path(u_abs_err, msh, os.path.join(plot_dir, f"abs_err_uG_vs_uG_pred_sample_{sample_idx}"))
+        # Absolute prediction error field |uG - uG_pred|
+        u_abs_err = Function(V)
+        u_abs_err.vector.array[:] = np.abs(uG.vector.array - uG_pred.vector.array)
+        _plot_to_path(u_abs_err, msh, os.path.join(plot_dir, f"abs_err_uG_vs_uG_pred_sample_{sample_idx}"))
 
     return {
         "store_tag": store_tag,
@@ -389,14 +467,38 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
         "error_uG_vs_uh": err_uG_vs_uh,
         "error_uG_pred_vs_uh": err_uG_pred_vs_uh,
         "error_uG_pred_vs_uG": err_uG_pred_vs_uG,
+        "error_uG_pred_vs_uh_rel_L2": err_uG_pred_vs_uh_rel_L2,
+        "error_uG_pred_vs_uh_rel_H1": err_uG_pred_vs_uh_rel_H1,
     }
 
 
+def load_predictions_dir(predictions_dir):
+    """Load ``sub_dom_<idx>.npz`` files (key ``pred``) from a directory.
+
+    Returns ``{subdomain_index: array of shape (num_samples, k, nx+1, ny+1)}``.
+    Subdomains without a file are simply absent and hence fall back to the
+    local eigsolve.
+    """
+    predictions_dir = Path(predictions_dir)
+    predictions_data = {}
+    for path in sorted(predictions_dir.glob("sub_dom_*.npz")):
+        match = re.fullmatch(r"sub_dom_(\d+)", path.stem)
+        if match is None:
+            continue
+        with np.load(path) as npz:
+            predictions_data[int(match.group(1))] = npz["pred"]
+    if not predictions_data:
+        raise FileNotFoundError(
+            f"No 'sub_dom_<idx>.npz' prediction files found in {predictions_dir}."
+        )
+    return predictions_data
+
+
 if __name__ == "__main__":
-    # Minimal smoke test: load parameters and predictions produced by ex_FNO.py
-    # and run compute_overall_errors.  ``--predictions`` must point at a .npz
-    # file whose keys are the (stringified) subdomain indices (e.g. ``"5"``)
-    # and whose values have shape ``(num_samples, k, nx+1, ny+1)``.
+    # Load parameters and predictions and run compute_overall_errors.
+    # ``--predictions`` is the directory holding one ``sub_dom_<idx>.npz`` file
+    # per subdomain (key ``pred``, shape ``(num_samples, k, nx+1, ny+1)``) and
+    # ``--parameters`` the directory holding ``input_parameters.npy``.
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -405,10 +507,11 @@ if __name__ == "__main__":
     parser.add_argument("--store_tag", type=str, required=True,
                         help="Coefficient family (see setup.FNO_coeffs).")
     parser.add_argument("--parameters", type=str, required=True,
-                        help="Path to a .npy file of shape (num_samples, sample_dim).")
+                        help="Directory containing 'input_parameters.npy' of "
+                             "shape (num_samples, sample_dim).")
     parser.add_argument("--predictions", type=str, required=True,
-                        help="Path to a .npz file with integer-string keys "
-                             "(e.g. '5') and values of shape "
+                        help="Directory containing 'sub_dom_<idx>.npz' files "
+                             "with key 'pred' of shape "
                              "(num_samples, k, nx+1, ny+1).")
     parser.add_argument("--nloc", type=int, default=5)
     parser.add_argument("--out", type=str, default=None,
@@ -419,19 +522,10 @@ if __name__ == "__main__":
     if args.out is None:
         args.out = os.path.join("errors", args.store_tag, "errors.npz")
 
-    parameters = np.load(args.parameters)
-
-    with np.load(args.predictions) as _npz:
-        predictions_data = {}
-        for key in _npz.files:
-            try:
-                idx = int(key)
-            except ValueError as exc:
-                raise ValueError(
-                    f"Unexpected key {key!r} in {args.predictions}; "
-                    "expected an integer string (e.g. '5')."
-                ) from exc
-            predictions_data[idx] = _npz[key]
+    parameters = np.load(Path(args.parameters) / "input_parameters.npy")
+    predictions_data = load_predictions_dir(args.predictions)
+    print(f"Loaded predictions for subdomains {sorted(predictions_data)} "
+          f"({parameters.shape[0]} parameter samples).", flush=True)
 
     result = compute_overall_errors(
         store_tag=args.store_tag,
@@ -445,3 +539,4 @@ if __name__ == "__main__":
         os.makedirs(out_parent, exist_ok=True)
     np.savez(args.out, **result)
     print(f"Wrote errors to {args.out}")
+    ray.shutdown()

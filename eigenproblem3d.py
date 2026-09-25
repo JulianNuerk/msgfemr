@@ -86,7 +86,7 @@ class Omega():
         return np.logical_and(self.boundary(x), np.logical_not(self.on_global_boundary(x)))
     
 
-def computeSubdomain(n_part, nloc, bool_ring, ol, os, nnz_computation = False):
+def computeSubdomain(n_part, nloc, bool_ring, ol, os, nnz_computation = False, coeff_A_function = None, timing_iterations = None):
     xR = 1
     xL = 0
     yR = xR
@@ -100,7 +100,8 @@ def computeSubdomain(n_part, nloc, bool_ring, ol, os, nnz_computation = False):
     ny = nx 
     nz = nx
     nDom = Nx * Ny * Nz
-    coeff_A_function = lambda x: np.ones(x.shape[1])
+    if coeff_A_function is None:
+        coeff_A_function = lambda x: np.ones(x.shape[1])
     deg = 1
     def robin_boundary(x):
         bool_tmp = np.isclose(x[1], -1)
@@ -314,7 +315,7 @@ def computeSubdomain(n_part, nloc, bool_ring, ol, os, nnz_computation = False):
     eta.vector.array[locate_dofs_geometrical(Vs, omega_eta.inside)] = 0
     Eta = diags(eta.vector.array)
 
-    coeff_A = Function(functionspace(submesh, ("DG", 0)))
+    coeff_A = Function(functionspace(submesh, ("Lagrange", 1)))
     coeff_A.interpolate(coeff_A_function)
 
     coeff_A.vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
@@ -427,10 +428,11 @@ def computeSubdomain(n_part, nloc, bool_ring, ol, os, nnz_computation = False):
     else:
         timing = 0
         timing_aharmonic_extension = 0
-        if nnz_computation:
-            timing_iterations = 1 # how often to solve the eigenproblem and average times
-        else: 
-            timing_iterations = 10
+        if timing_iterations is None:
+            if nnz_computation:
+                timing_iterations = 1 # how often to solve the eigenproblem and average times
+            else: 
+                timing_iterations = 10
         # Solve eigenproblem 
         for i in range(timing_iterations):
             start = time.time()
@@ -484,4 +486,4 @@ def computeSubdomain(n_part, nloc, bool_ring, ol, os, nnz_computation = False):
 
         return nnz_superlu, nnz_MA, size_eigenproblem
     else:
-        return timing, size_eigenproblem, timing_aharmonic_extension
+        return timing, size_eigenproblem, [omega_os.nx, omega_os.ny, omega_os.nz], timing_aharmonic_extension

@@ -1,13 +1,13 @@
 #!/bin/bash -l
-#BSUB -J msgfem_FNO_data_gen[1-3]                       # One array task per entry in TAGS (update range to match len(TAGS))
+#BSUB -J msgfem_FNO_data_gen[1-6]                       # One array task per (TAGS, NLOC_LIST) pair (range must equal len(TAGS) * len(NLOC_LIST))
 #BSUB -P BH-000543
-#BSUB -o cluster_job_info/test_msgfem_FNO.%J.%I.stdout         
-#BSUB -e cluster_job_info/test_msgfem_FNO.%J.%I.stderr
+#BSUB -o cluster_jobs_info/generate_msgfem_FNO_data.%J.%I.stdout         
+#BSUB -e cluster_jobs_info/generate_msgfem_FNO_data.%J.%I.stderr
 #BSUB -q batch_cpu                                     # Dedicated CPU queue
-#BSUB -W 4:00                                            # Wallclock time (~40-50 min compute for 10000 samples + margin)
-#BSUB -n 24                                               # CPU cores per task = number of Ray workers; set >= len(subdom_idx_list) in ex_FNO.py
+#BSUB -W 12:00                                            # Wallclock time (101 samples x 16 subdomains on 32 workers + margin)
+#BSUB -n 12                                              # CPU cores per task = number of Ray workers; a multiple of len(SUBDOM_IDX_LIST) keeps every core busy
 #BSUB -R "span[hosts=1]"                                  # Ensure cores are on the same host
-#BSUB -R "rusage[mem=1G]"                                # Per-slot RAM (peak ~7.2G total across the -n workers; streaming so independent of num_samples)
+#BSUB -R "rusage[mem=1G]"                                # Per-slot RAM (one eigenproblem per worker; streaming so independent of num_samples)
 
 # Load modules (removed CUDA since it's CPU only)
 module purge
@@ -17,16 +17,43 @@ vEnv=msgfemr
 mamba activate $vEnv
 
 # Define the array of parameters to loop through
-TAGS=("channel_coeff" "channel_rotated_coeff" "multiscale_sincos_coeff")
+TAGS=("bubble_coeff" "channel_rotated_coeff" "multiscale_sincos_coeff")
 
 # Subdomain indices solved in parallel per sample (space separated).
-# Keep len(SUBDOM_IDX_LIST) <= the -n cores requested above.
+# All 16 subdomains of the 4x4 partition; -n above should be >= this count.
 SUBDOM_IDX_LIST="0 1 3 4 5 11 12 14 15"
 
-CURRENT_TAG=${TAGS[$LSB_JOBINDEX - 1]}
+# Optional: rerun only these sample indices, reusing the stored parameters from
+# samples_$NUM_SAMPLES/input_paras_num_samples_$NUM_SAMPLES.npy. Leave empty to
+# draw new parameters and write to samples_$NUM_SAMPLES as before.
+PARAM_INDICES=""
+
+NUM_SAMPLES=10000
+
+# nloc values swept by the job array (one task per tag/nloc combination).
+NLOC_LIST=(10 20)
+
+# Map the flat array index onto the (tag, nloc) grid.
+IDX=$((LSB_JOBINDEX - 1))
+CURRENT_TAG=${TAGS[$((IDX / ${#NLOC_LIST[@]}))]}
+NLOC=${NLOC_LIST[$((IDX % ${#NLOC_LIST[@]}))]}
+
+# One thread per Ray task; without this BLAS oversubscribes the reserved cores.
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
 
 echo "Starting CPU-only job on host: $HOSTNAME"
-echo "Running ex_FNO.py with store_tag = $CURRENT_TAG and num_samples = 10000"
+echo "Running ex_FNO.py with store_tag = $CURRENT_TAG, num_samples = $NUM_SAMPLES and nloc = $NLOC"
+echo "Cores reserved by LSF: ${LSB_DJOB_NUMPROC:-unset}"
+
+PARAM_ARGS=()
+if [[ -n "$PARAM_INDICES" ]]; then
+    PARAM_ARGS=(--param_indices $PARAM_INDICES)
+    echo "Reusing stored parameters for $(echo $PARAM_INDICES | wc -w) sample indices"
+fi
 
 # Run the python script
-python ex_FNO.py --store_tag $CURRENT_TAG --num_samples 10000 --subdom_idx_list $SUBDOM_IDX_LIST
+python ex_FNO.py --store_tag $CURRENT_TAG --num_samples $NUM_SAMPLES --subdom_idx_list $SUBDOM_IDX_LIST "${PARAM_ARGS[@]}" --nloc $NLOC

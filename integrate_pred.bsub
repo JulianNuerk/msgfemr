@@ -1,0 +1,81 @@
+#!/bin/bash -l
+#BSUB -J "integrate_pred[1]"                           # Job array: one element per store tag
+#BSUB -P BH-000543
+#BSUB -o cluster_jobs_info/integrate_pred.%J.%I.stdout
+#BSUB -e cluster_jobs_info/integrate_pred.%J.%I.stderr
+#BSUB -q inter_a100                                       # Dedicated CPU queue
+#BSUB -W 1:00                                            # Wallclock time
+#BSUB -n 24                                              # CPU cores = number of Ray workers; set >= number of subdomains
+#BSUB -R "span[hosts=1]"                                 # Ensure cores are on the same host
+#BSUB -R "rusage[mem=1G]"                                # Per-slot RAM
+
+# Load modules (CPU only)
+module purge
+
+# Activate virtual environment
+vEnv=msgfemr
+mamba activate $vEnv
+
+# ---------------------------------------------------------------------------
+# User configuration
+# ---------------------------------------------------------------------------
+# One entry per array element; the array range in the -J line above must match
+# the number of entries here.
+STORE_TAGS=(
+    "channel_rotated_coeff"
+    #"channel_rotated_coeff"
+    #"bubble_coeff"
+)
+EXPERIMENT_TAG="hardcode_constant"
+
+# Directory that holds the predictions (sub_dom_<idx>.npz, key 'pred') of the
+# corresponding store tag.
+PREDICTION_DIRS=(/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/FNO_predictions/experiments/channel_rotated_coeff/modified_pred/random_grassmann/all_subdomains
+    #"/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/kam8rng_kmario23/predictions/multiscale_sincos_coeff/local_eig_functions_n_5/all_subdomains")
+   # "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/kam8rng_kmario23/predictions/channel_rotated_coeff/local_eig_functions_n_5/all_subdomains"
+   # "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/kam8rng_kmario23/predictions/bubble_coeff_10k/local_eig_functions_n_5/all_subdomains"
+)
+
+# Directory that holds input_parameters.npy of the corresponding store tag.
+PARAMETER_DIRS=(
+    #"/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/FNO_data/multiscale_sincos_coeff/samples_10000_from_parameter")
+    "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/FNO_data/channel_rotated_coeff/samples_10000_from_parameter"
+   # "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/FNO_data/bubble_coeff/samples_10000_from_parameter"
+)
+
+# Number of local eigenfunctions used (must match the prediction tensors).
+NLOC=5
+
+# ---------------------------------------------------------------------------
+IDX=$((LSB_JOBINDEX - 1))
+STORE_TAG="${STORE_TAGS[$IDX]}"
+PREDICTIONS="${PREDICTION_DIRS[$IDX]}"
+PARAMETERS="${PARAMETER_DIRS[$IDX]}"
+
+if [[ -z "$STORE_TAG" || -z "$PREDICTIONS" || -z "$PARAMETERS" ]]; then
+    echo "No configuration for array index $LSB_JOBINDEX" >&2
+    exit 1
+fi
+
+# Output locations. integrate_predictions.py writes the error arrays to --out
+# and always writes the XDMF visualisations to
+# plots/overall_predictions/<STORE_TAG>/.
+OUT="errors/${EXPERIMENT_TAG}/errors.npz"
+PLOTS="plots/overall_predictions/${EXPERIMENT_TAG}"
+
+# ---------------------------------------------------------------------------
+echo "Starting CPU-only job on host: $HOSTNAME"
+echo "array index = $LSB_JOBINDEX"
+echo "store_tag   = $STORE_TAG"
+echo "parameters  = $PARAMETERS/input_parameters.npy"
+echo "predictions = $PREDICTIONS/sub_dom_<idx>.npz"
+echo "errors ->     $OUT"
+echo "plots ->      $PLOTS"
+
+# Run the evaluation
+python integrate_predictions.py \
+    --store_tag "$STORE_TAG" \
+    --parameters "$PARAMETERS" \
+    --predictions "$PREDICTIONS" \
+    --nloc "$NLOC" \
+    --out "$OUT"

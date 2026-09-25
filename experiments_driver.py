@@ -116,8 +116,20 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
         angles  = np.random.uniform(0, np.pi, (num_lines, 1))  # (num_samples, 10, 1)
         parameters = np.column_stack([centers, lengths, angles]).ravel()
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.random_lines_msgfem(xL, yL, xR, yR, V, msh, parameters)
-
-
+    elif problem_label ==  'multiscale_sincos_coeff':
+         # Positive multiscale coefficient A = 0.1 + exp(sum_k a_k sin(2*pi*(kx*x+ky*y))
+        #                                              + b_k cos(2*pi*(kx*x+ky*y))).
+        # Per mode we sample integer frequencies spanning coarse-to-fine scales and
+        # amplitudes that decay with frequency so high modes stay bounded.
+        K = 5                                   # number of Fourier modes
+        k_min, k_max = 1, 16                    # frequency range -> multiscale content
+        kx = np.random.randint(k_min, k_max + 1, size=(K)).astype(float)
+        ky = np.random.randint(k_min, k_max + 1, size=( K)).astype(float)
+        scale = 1.0 / np.sqrt(kx ** 2 + ky ** 2)   # amplitude decay with frequency
+        a = np.random.uniform(-1.0, 1.0, size=(K)) * scale
+        b = np.random.uniform(-1.0, 1.0, size=(K)) * scale
+        parameters = np.stack([kx, ky, a, b]).reshape(4 * K)
+        dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, problem_label)
     
     # Create FE function for coefficient A, which is a DG0 function
     coeff_A = Function(functionspace(msh, ("DG", 0))) 

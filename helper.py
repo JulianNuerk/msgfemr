@@ -114,6 +114,49 @@ def compute_errors(u, uexact, msh, coeff_A):
     )
     return abs(np.sqrt(H1_diff) / np.sqrt(H1_exact))
 
+def compute_rel_L2(u, uexact, msh):
+    """
+    Computes the relative L2 error between a solution u  and the exact (reference) solution.
+    Parameters
+    ----------
+    u : Function or array-like
+        The numerical solution to compare.
+    uexact : Function or array-like
+        The exact solution for reference.
+    msh : Mesh object
+        The mesh over which the solutions are defined. 
+    Returns
+    -------
+    float
+        The relative L2 error, defined as sqrt(L2_diff) / sqrt(L2_exact), where L2_diff is the L2 norm of the difference and L2_exact is the L2 norm of the exact solution.
+    """
+    
+    diff = u - uexact
+    L2_diff = msh.comm.allreduce(assemble_scalar(form(diff**2 * dx)), op=MPI.SUM)
+    L2_exact = msh.comm.allreduce(assemble_scalar(form(uexact**2 * dx)), op=MPI.SUM)
+    return abs(np.sqrt(L2_diff) / np.sqrt(L2_exact))    
+
+def compute_rel_H1(u, uexact, msh):
+    """
+    Computes the relative H1 error between a solution u and the exact (reference) solution.
+    Parameters
+    ----------
+    u : Function or array-like
+        The numerical solution to compare.
+    uexact : Function or array-like
+        The exact solution for reference.
+    msh : Mesh object
+        The mesh over which the solutions are defined. 
+    Returns
+    -------
+    float
+        The relative H1 error, defined as sqrt(H1_diff) / sqrt(H1_exact), where H1_diff is the H1 norm of the difference and H1_exact is the H1 norm of the exact solution.
+    """
+    
+    diff = u - uexact
+    H1_diff = msh.comm.allreduce(assemble_scalar(form(inner(grad(diff), grad(diff)) * dx)), op=MPI.SUM)
+    H1_exact = msh.comm.allreduce(assemble_scalar(form(inner(grad(uexact), grad(uexact)) * dx)), op=MPI.SUM)
+    return abs(np.sqrt(H1_diff) / np.sqrt(H1_exact))
 
 # def getHelmholtzProblem(k, coeff_V, u_R, ds, f, imag_unit, msh, V):
 #     # Define variational problem

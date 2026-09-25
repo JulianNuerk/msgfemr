@@ -766,49 +766,62 @@ def random_lines(x, p):
 
 def bubble_coeff(x, p):
     """
-    Coefficient function A(x, p) that creates a piecewise-constant field with
-    five circular "bubbles" of random center, radius and height on a low
-    background. Bubbles are confined to a square subdomain [x0, y1] x [x0, y1]
-    whose bounds are also encoded in the parameter vector p.
+    Coefficient function A(x, p) with one circular bubble per subdomain.
+
+    The global domain [0, 1] x [0, 1] is partitioned into a 4 x 4 grid of
+    equal square subdomains. For each subdomain k we place one circular bubble
+    with a random center and radius. The parameter vector stores one tuple
+    (cx_k, cy_k, radius_k, height_k) per subdomain, where `cx_k` and `cy_k`
+    are local coordinates inside the subdomain and `height_k` is sampled in the
+    interval [1, 1000]. Away from all bubbles the coefficient is the constant
+    background value 0.1.
 
     Parameters
     ----------
     x : np.ndarray, shape (2, num_gridpoints)
         Spatial coordinates; x[0] = x-coords, x[1] = y-coords.
-    p : np.ndarray, shape (2 + 5 * 4,) = (22,)
-        Parameter vector:
-            p[0] = x0   subdomain lower bound (used for both x and y)
-            p[1] = y1   subdomain upper bound (used for both x and y)
-        For each bubble i = 0, ..., 4:
-            p[2 + 4 * i]     = cx      center x coordinate
-            p[2 + 4 * i + 1] = cy      center y coordinate
-            p[2 + 4 * i + 2] = radius
-            p[2 + 4 * i + 3] = height  (contrast value inside the bubble)
-
-    The sampling of the bubble parameters (done outside this function, e.g.
-    in ex_FNO.py) must ensure that every bubble is fully contained in the
-    subdomain, i.e. cx - r >= x0, cx + r <= y1, cy - r >= x0, cy + r <= y1.
+    p : np.ndarray, shape (4 * 16,) = (64,)
+        Parameter vector with 4 entries per subdomain:
+            p[4*k]     = cx_k     (local x-center in the kth subdomain)
+            p[4*k + 1] = cy_k     (local y-center in the kth subdomain)
+            p[4*k + 2] = radius_k (bubble radius)
+            p[4*k + 3] = height_k (bubble value in [1, 1000])
 
     Returns
     -------
     z : np.ndarray, shape (num_gridpoints,)
-        Coefficient values (0.1 background, up to 100 inside a bubble).
+        Coefficient values (0.1 background, random positive value inside each
+        bubble).
     """
+    N = 4
+    side = 1.0 / N
     background = 0.1
-    num_bubbles = (len(p) - 2) // 4
+
+    p = np.asarray(p).ravel()
+    if p.size != 4 * N * N:
+        raise ValueError(
+            f"bubble_coeff expects {4 * N * N} parameters (4 per subdomain) "
+            f"for a 4x4 partition; got {p.size}."
+        )
 
     z = np.full(x.shape[1], background)
+    for i in range(N):
+        for j in range(N):
+            k = i * N + j
+            x0 = i * side
+            y0 = j * side
 
-    for i in range(num_bubbles):
-        cx     = p[2 + 4 * i]
-        cy     = p[2 + 4 * i + 1]
-        radius = p[2 + 4 * i + 2]
-        height = p[2 + 4 * i + 3]
+            cx_local = p[4 * k]
+            cy_local = p[4 * k + 1]
+            radius = p[4 * k + 2]
+            height = p[4 * k + 3]
 
-        dx = x[0] - cx
-        dy = x[1] - cy
-        mask = (dx * dx + dy * dy) <= radius * radius
-        z[mask] = height
+            cx = x0 + cx_local
+            cy = y0 + cy_local
+            dx = x[0] - cx
+            dy = x[1] - cy
+            mask = (dx * dx + dy * dy) <= radius * radius
+            z[mask] = height
 
     return z
 
@@ -829,16 +842,14 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
         
         # Define the Dirichlet boundary condition
         u_D = Function(V)
-        # TODO: return correct dirichlet boundary for later global solve.
+        u_D.interpolate(lambda x: np.full(x.shape[1], 0.0))
         # Define the Robin boundary condition
         u_R = Function(V)
         u_R.interpolate(lambda x: np.full(x.shape[1], 0.0)) 
 
         # Define source term
-        # TODO: think of meaningful source term.
         f = Function(V)
-        x0, y0 = 0.7, 0.9
-        f.interpolate(lambda x: np.exp(-((x[0] - x0)**2 + (x[1] - y0)**2) ))
+        f.interpolate(lambda x: np.full(x.shape[1], 1.0))
         # coeff in PDE
         if store_tag == 'channel_coeff':
             coeff_A_function = lambda x : channel(x, parameters)

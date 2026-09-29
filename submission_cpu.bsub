@@ -1,10 +1,10 @@
 #!/bin/bash -l
-#BSUB -J msgfem_FNO_data_gen[1-6]                       # One array task per (TAGS, NLOC_LIST) pair (range must equal len(TAGS) * len(NLOC_LIST))
+#BSUB -J msgfem_FNO_data_gen[1-3]                       # One array task per (TAGS, NLOC_LIST) pair (range must equal len(TAGS) * len(NLOC_LIST))
 #BSUB -P BH-000543
 #BSUB -o cluster_jobs_info/generate_msgfem_FNO_data.%J.%I.stdout         
 #BSUB -e cluster_jobs_info/generate_msgfem_FNO_data.%J.%I.stderr
 #BSUB -q batch_cpu                                     # Dedicated CPU queue
-#BSUB -W 12:00                                            # Wallclock time (101 samples x 16 subdomains on 32 workers + margin)
+#BSUB -W 8:00                                            # Wallclock time (101 samples x 16 subdomains on 32 workers + margin)
 #BSUB -n 12                                              # CPU cores per task = number of Ray workers; a multiple of len(SUBDOM_IDX_LIST) keeps every core busy
 #BSUB -R "span[hosts=1]"                                  # Ensure cores are on the same host
 #BSUB -R "rusage[mem=1G]"                                # Per-slot RAM (one eigenproblem per worker; streaming so independent of num_samples)
@@ -17,7 +17,7 @@ vEnv=msgfemr
 mamba activate $vEnv
 
 # Define the array of parameters to loop through
-TAGS=("bubble_coeff" "channel_rotated_coeff" "multiscale_sincos_coeff")
+TAGS=("channel_long_coeff")
 
 # Subdomain indices solved in parallel per sample (space separated).
 # All 16 subdomains of the 4x4 partition; -n above should be >= this count.
@@ -31,7 +31,7 @@ PARAM_INDICES=""
 NUM_SAMPLES=10000
 
 # nloc values swept by the job array (one task per tag/nloc combination).
-NLOC_LIST=(10 20)
+NLOC_LIST=(5 10 20)
 
 # Map the flat array index onto the (tag, nloc) grid.
 IDX=$((LSB_JOBINDEX - 1))

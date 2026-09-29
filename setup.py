@@ -525,6 +525,85 @@ def channel_rotated(x, parameters):
     return value
 
 
+# Geometry of the 'channel_long_coeff' family; also used by the sampler in
+# ex_FNO.py to draw admissible parameters.
+CHANNEL_LONG_NUM = 10                                  # number of channels
+CHANNEL_LONG_LENGTH = 0.9                              # long axis (x-extent)
+CHANNEL_LONG_THICKNESS = 1.0 / (5 * CHANNEL_LONG_NUM)  # short axis (y-extent)
+CHANNEL_LONG_MAX_ANGLE = np.pi / 36.0                  # +/- 5 degrees tilt
+CHANNEL_LONG_BACKGROUND = 0.1
+
+
+def channel_long(x, parameters, n_channels=CHANNEL_LONG_NUM):
+    """
+    Long horizontal channels running across the unit square [0, 1] x [0, 1].
+
+    ``n_channels`` thin, nearly horizontal channels are stacked in
+    y-direction, one per horizontal band of height ``1 / n_channels``, so
+    that they spread over the whole domain. Every channel has the same fixed
+    geometry:
+
+        - length    (long axis)  = ``CHANNEL_LONG_LENGTH`` = 0.9
+        - thickness (short axis) = ``CHANNEL_LONG_THICKNESS``
+
+    Channel ``k`` is centered at ``(cx_k, cy_k)`` and rotated about its own
+    center by the small angle ``theta_k``, so it stays close to horizontal.
+    Since the channels are long they may be cut by the global boundary.
+    Away from every channel the function returns the fixed background value
+    ``CHANNEL_LONG_BACKGROUND`` = 0.1; with channel values up to 1000 the
+    contrast is at most 10000.
+
+    Parameters
+    ----------
+    x : array-like, shape (2, num_gridpoints)
+        Spatial coordinates; ``x[0]`` are x-coords, ``x[1]`` are y-coords.
+    parameters : array-like, shape (4 * n_channels,)
+        Concatenated parameters of the channels, ordered from the bottom
+        band upwards. For every channel ``k``:
+
+            parameters[4*k]     = cx_k     (x-coordinate of the center)
+            parameters[4*k + 1] = cy_k     (y-coordinate of the center)
+            parameters[4*k + 2] = h_k      (channel value / contrast)
+            parameters[4*k + 3] = theta_k  (tilt angle in radians)
+    n_channels : int, optional
+        Number of channels encoded in ``parameters``.
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        Coefficient field (``0.1`` outside every channel, ``h_k`` inside
+        channel ``k``).
+    """
+    parameters = np.asarray(parameters).ravel()
+    if parameters.size != 4 * n_channels:
+        raise ValueError(
+            f"channel_long expects {4 * n_channels} parameters (4 per each of "
+            f"the {n_channels} channels); got {parameters.size}."
+        )
+
+    value = np.full(x.shape[1], CHANNEL_LONG_BACKGROUND)
+    for k in range(n_channels):
+        center_x = parameters[4 * k]
+        center_y = parameters[4 * k + 1]
+        height = parameters[4 * k + 2]
+        theta = parameters[4 * k + 3]
+
+        # Map the points into the channel's own (axis-aligned) frame.
+        x_translated = x[0] - center_x
+        y_translated = x[1] - center_y
+        cos_theta = np.cos(-theta)
+        sin_theta = np.sin(-theta)
+        x_unrotated = x_translated * cos_theta - y_translated * sin_theta
+        y_unrotated = x_translated * sin_theta + y_translated * cos_theta
+
+        on_channel = np.logical_and(
+            np.abs(x_unrotated) <= CHANNEL_LONG_LENGTH / 2.0,
+            np.abs(y_unrotated) <= CHANNEL_LONG_THICKNESS / 2.0,
+        )
+        value = np.where(on_channel, height, value)
+    return value
+
+
 def channel_sub_dom_five(x, parameters):
     """
     Channel configuration for subdomain five. Works only for subdomains that come from a regular 4x4 partition of the global domain
@@ -855,6 +934,8 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
             coeff_A_function = lambda x : channel(x, parameters)
         elif store_tag == 'channel_rotated_coeff':
             coeff_A_function = lambda x : channel_rotated(x, parameters)
+        elif store_tag == 'channel_long_coeff':
+            coeff_A_function = lambda x : channel_long(x, parameters)
         elif store_tag == 'channel_sub_dom_five_coeff':
             coeff_A_function = lambda x : 1 +  channel_sub_dom_five(x, parameters)
         elif store_tag == 'sinus_coeff':

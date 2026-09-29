@@ -102,6 +102,29 @@ elif store_tag == 'channel_rotated_coeff':
     high = np.tile([p0_bound, p1_bound, 1e+03, 2 * np.pi], N_sub * N_sub)
     parameters = np.random.uniform(low=low, high=high,
                                    size=(num_samples, 4 * N_sub * N_sub))
+elif store_tag == 'channel_long_coeff':
+    # Long, thin and nearly horizontal channels running across [0,1]x[0,1].
+    # One channel per horizontal band of height 1/n_channels so that they
+    # spread over the whole domain; per channel we sample
+    # (center_x, center_y, height, angle). The channels are long (90% of the
+    # domain) and may therefore be cut by the global boundary. Geometry
+    # constants mirror setup.channel_long.
+    n_channels = 10
+    length_channel = 0.9
+    thickness_channel = 1.0 / (5 * n_channels)
+    max_angle = np.pi / 36.0                      # +/- 5 degrees tilt
+    band = 1.0 / n_channels
+    cx_jitter = (1.0 - length_channel) / 2.0      # keeps the channel centered-ish
+    cy_jitter = band / 2.0 - thickness_channel    # channel stays in its band
+
+    band_centers = (np.arange(n_channels) + 0.5) * band
+    cx = 0.5 + np.random.uniform(-cx_jitter, cx_jitter, size=(num_samples, n_channels))
+    cy = band_centers + np.random.uniform(-cy_jitter, cy_jitter,
+                                          size=(num_samples, n_channels))
+    heights = np.random.uniform(1.0, 1e+03, size=(num_samples, n_channels))
+    angles = np.random.uniform(-max_angle, max_angle, size=(num_samples, n_channels))
+    parameters = np.stack([cx, cy, heights, angles], axis=2).reshape(
+        num_samples, 4 * n_channels)
 elif store_tag == 'sinus_coeff':
     parameters = np.random.uniform(low=[5,10], high=[10, 20], size=(num_samples, 2))
 elif store_tag == 'multiscale_sincos_coeff':

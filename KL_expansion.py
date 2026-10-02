@@ -14,7 +14,6 @@ Steps:
 import numpy as np
 from scipy.linalg import eigh
 from scipy.interpolate import RegularGridInterpolator
-import matplotlib.pyplot as plt
 
 def covariance_kernel_2d(x1, x2, lx=0.02, ly=0.6, sigma2=2.0):
     """

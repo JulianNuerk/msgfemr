@@ -9,4 +9,9 @@ settings.json
 requirements.yaml
 .vscode/
 errors/
+cluster_jobs_info
 .gitignore
+*.pdf
+times/
+data_mario/
+test.ipynb

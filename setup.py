@@ -928,7 +928,8 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
 
         # Define source term
         f = Function(V)
-        f.interpolate(lambda x: np.full(x.shape[1], 1.0))
+        #f.interpolate(lambda x: np.full(x.shape[1], 1.0))
+        f.interpolate(lambda x: 3*np.exp(-(x[0] - 0.7)**2 - (x[1] - 0.9)**2))
         # coeff in PDE
         if store_tag == 'channel_coeff':
             coeff_A_function = lambda x : channel(x, parameters)

@@ -763,6 +763,7 @@ def computeSubdomain(parameters):
         vals = np.abs(vals)          # Sometimes get negative eigenvalue corresponding to the zero eigenvalue, so take absolute value for proper ordering
         vals, vecs = helper.sort_eigenpairs(vals, vecs)
         
+        
     if prediction is None:
         vecs_tmp = np.zeros((Xi.shape[0], vecs.shape[1]))
         vecs_tmp[non_dirichlet_dofs,:] = vecs[:len(non_dirichlet_dofs), :]

@@ -102,6 +102,29 @@ elif store_tag == 'channel_rotated_coeff':
     high = np.tile([p0_bound, p1_bound, 1e+03, 2 * np.pi], N_sub * N_sub)
     parameters = np.random.uniform(low=low, high=high,
                                    size=(num_samples, 4 * N_sub * N_sub))
+elif store_tag in ('channel_rotated_medium_contrast_coeff',
+                   'channel_rotated_small_contrast_coeff'):
+    # Same geometry and sampling as 'channel_rotated_coeff', only the channel
+    # height (and hence the contrast against the 0.1 background) is capped at
+    # 1e2 (medium) resp. 1e1 (small).
+    N_sub = 4
+    side = 1.0 / N_sub
+    width_channel = side / 10.0
+    high_channel = side / 2.0
+    p0_bound = side - width_channel - eps  # max channel_x_offset
+    p1_bound = side - high_channel - eps   # max channel_y_offset
+    max_height = 1e+02 if store_tag == 'channel_rotated_medium_contrast_coeff' else 1e+01
+    low  = np.tile([eps, eps, 1.0, 0.0],                   N_sub * N_sub)
+    high = np.tile([p0_bound, p1_bound, max_height, 2 * np.pi], N_sub * N_sub)
+    parameters = np.random.uniform(low=low, high=high,
+                                   size=(num_samples, 4 * N_sub * N_sub))
+elif store_tag == 'channel_rotation_circle_coeff':
+    # Same geometry as 'channel_rotated_coeff' but the channel of every
+    # subdomain sits in the subdomain center and has a fixed contrast; the
+    # only random parameter per subdomain is the rotation angle in [0, 2*pi].
+    N_sub = 4
+    parameters = np.random.uniform(low=0.0, high=2 * np.pi,
+                                   size=(num_samples, N_sub * N_sub))
 elif store_tag == 'channel_long_coeff':
     # Long, thin and nearly horizontal channels running across [0,1]x[0,1].
     # One channel per horizontal band of height 1/n_channels so that they
@@ -140,6 +163,24 @@ elif store_tag == 'multiscale_sincos_coeff':
     a = np.random.uniform(-1.0, 1.0, size=(num_samples, K)) * scale
     b = np.random.uniform(-1.0, 1.0, size=(num_samples, K)) * scale
     parameters = np.stack([kx, ky, a, b], axis=2).reshape(num_samples, 4 * K)
+elif store_tag == 'multiscale_sincos_hc_coeff':
+    # Same smooth multiscale structure as 'multiscale_sincos_coeff', but the
+    # amplitudes are rescaled to hit a prescribed contrast (parameters[:, 0] =
+    # log10 of the target contrast, sampled log-uniformly). This isolates the
+    # effect of the contrast from the effect of coefficient discontinuities:
+    # the parameter -> coefficient -> eigenspace map stays smooth.
+    K = 5
+    k_min, k_max = 1, 16
+    log10_contrast_min, log10_contrast_max = 1.0, 4.0   # contrast 1e1 ... 1e4
+    kx = np.random.randint(k_min, k_max + 1, size=(num_samples, K)).astype(float)
+    ky = np.random.randint(k_min, k_max + 1, size=(num_samples, K)).astype(float)
+    scale = 1.0 / np.sqrt(kx ** 2 + ky ** 2)
+    a = np.random.uniform(-1.0, 1.0, size=(num_samples, K)) * scale
+    b = np.random.uniform(-1.0, 1.0, size=(num_samples, K)) * scale
+    log10_contrast = np.random.uniform(log10_contrast_min, log10_contrast_max,
+                                       size=(num_samples, 1))
+    modes = np.stack([kx, ky, a, b], axis=2).reshape(num_samples, 4 * K)
+    parameters = np.concatenate([log10_contrast, modes], axis=1)
 elif store_tag == 'channel_low_coeff':
     # Same geometry as 'channel_coeff' but with a much lower height range.
     N_sub = 4
@@ -164,7 +205,7 @@ elif store_tag == 'crosspoint_1d_coeff':
     contrast = 10000
     parameters = contrast*np.ones((num_samples, 2))
     parameters[:,0] = np.linspace(0, 1,num_samples)
-elif store_tag == 'random_lines':
+elif store_tag == 'random_lines_coeff':
     num_lines = 10
     centers = np.random.uniform(0.1, 0.9, (num_samples, num_lines, 2))  
     lengths = np.random.uniform(0.05, 0.4, (num_samples, num_lines, 1)) 

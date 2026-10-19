@@ -128,7 +128,7 @@ def run_msgfem(deg, Ny, ny, ol, os, nloc, rho, problem_label, bool_ring, contras
         scale = 1.0 / np.sqrt(kx ** 2 + ky ** 2)   # amplitude decay with frequency
         a = np.random.uniform(-1.0, 1.0, size=(K)) * scale
         b = np.random.uniform(-1.0, 1.0, size=(K)) * scale
-        parameters = np.stack([kx, ky, a, b]).reshape(4 * K)
+        parameters = np.stack([kx, ky, a, b], axis=1).reshape(4 * K)
         dirichlet_boundary, robin_boundary, u_D, f, coeff_A_function = setup.FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, problem_label)
     
     # Create FE function for coefficient A, which is a DG0 function

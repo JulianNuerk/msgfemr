@@ -514,9 +514,16 @@ if __name__ == "__main__":
                              "with key 'pred' of shape "
                              "(num_samples, k, nx+1, ny+1).")
     parser.add_argument("--nloc", type=int, default=5)
+    parser.add_argument("--max_samples", type=int, default=None,
+                        help="Only evaluate the first N samples. Samples are "
+                             "solved sequentially, so this is the knob that "
+                             "makes a first pass tractable.")
     parser.add_argument("--out", type=str, default=None,
                         help="Where to store the resulting error arrays. "
                              "Defaults to 'errors/<store_tag>/errors.npz'.")
+    parser.add_argument("--plot_root", type=str, default="plots/overall_predictions",
+                        help="Root for the XDMF visualisations. Separate it per "
+                             "model, otherwise a second run overwrites the first.")
     args = parser.parse_args()
 
     if args.out is None:
@@ -527,11 +534,20 @@ if __name__ == "__main__":
     print(f"Loaded predictions for subdomains {sorted(predictions_data)} "
           f"({parameters.shape[0]} parameter samples).", flush=True)
 
+    if args.max_samples:
+        # Slice both sides so the row pairing compute_overall_errors relies on
+        # is preserved.
+        m = min(int(args.max_samples), parameters.shape[0])
+        parameters = parameters[:m]
+        predictions_data = {k: v[:m] for k, v in predictions_data.items()}
+        print(f"Restricted to the first {m} samples.", flush=True)
+
     result = compute_overall_errors(
         store_tag=args.store_tag,
         parameters=parameters,
         predictions_data=predictions_data,
         nloc=args.nloc,
+        plot_root=args.plot_root,
     )
 
     out_parent = os.path.dirname(args.out)

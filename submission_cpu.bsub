@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#BSUB -J msgfem_FNO_data_gen[1-3]                       # One array task per (TAGS, NLOC_LIST) pair (range must equal len(TAGS) * len(NLOC_LIST))
+#BSUB -J msgfem_FNO_data_gen[1-4]                       # One array task per (TAGS, NLOC_LIST) pair (range must equal len(TAGS) * len(NLOC_LIST))
 #BSUB -P BH-000543
 #BSUB -o cluster_jobs_info/generate_msgfem_FNO_data.%J.%I.stdout         
 #BSUB -e cluster_jobs_info/generate_msgfem_FNO_data.%J.%I.stderr
@@ -17,7 +17,7 @@ vEnv=msgfemr
 mamba activate $vEnv
 
 # Define the array of parameters to loop through
-TAGS=("channel_long_coeff")
+TAGS=("multiscale_sincos_hc_coeff" "channel_rotation_circle_coeff" "channel_rotated_medium_contrast_coeff" "channel_rotated_small_contrast_coeff")
 
 # Subdomain indices solved in parallel per sample (space separated).
 # All 16 subdomains of the 4x4 partition; -n above should be >= this count.
@@ -31,7 +31,7 @@ PARAM_INDICES=""
 NUM_SAMPLES=10000
 
 # nloc values swept by the job array (one task per tag/nloc combination).
-NLOC_LIST=(5 10 20)
+NLOC_LIST=(5)
 
 # Map the flat array index onto the (tag, nloc) grid.
 IDX=$((LSB_JOBINDEX - 1))

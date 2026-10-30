@@ -525,6 +525,86 @@ def channel_rotated(x, parameters):
     return value
 
 
+# Geometry of the 'channel_rotation_circle_coeff' family; also used by the
+# samplers in ex_FNO.py / the plotting script to draw admissible parameters.
+CHANNEL_ROTATION_CIRCLE_N_SUB = 4                 # 4x4 subdomains -> 16 channels
+CHANNEL_ROTATION_CIRCLE_BACKGROUND = 0.1          # background value
+CHANNEL_ROTATION_CIRCLE_VALUE = 1.0e3             # fixed channel value -> contrast 1e4
+
+
+def channel_rotation_circle(x, parameters):
+    """
+    Rotation-only channel coefficient on the unit square [0, 1] x [0, 1].
+
+    Same structure as :func:`channel_rotated`, but the channels are not
+    translated and their contrast is fixed: the unit square is partitioned
+    into 4 x 4 = 16 equal square subdomains of side length ``1/4`` and one
+    rectangular channel is placed in the *center* of every subdomain with the
+    fixed geometry
+
+        - width  (short axis) = side / 10 = 1/40
+        - height (main axis)  = side / 2  = 1/8
+
+    The only random parameter per subdomain is the angle ``theta_k`` by which
+    the channel is rotated about the subdomain center, so the channel sweeps a
+    circle of radius ``sqrt((side/20)^2 + (side/4)^2) ~ 0.255 * side`` and
+    therefore never leaves its subdomain. The channel value is the fixed
+    constant ``CHANNEL_ROTATION_CIRCLE_VALUE`` and the background is
+    ``CHANNEL_ROTATION_CIRCLE_BACKGROUND``.
+
+    Parameters
+    ----------
+    x : array-like, shape (2, num_gridpoints)
+        Spatial coordinates; ``x[0]`` are x-coords, ``x[1]`` are y-coords.
+    parameters : array-like, shape (16,)
+        One rotation angle (in radians) per subdomain. Subdomains are indexed
+        in row-major order ``k = i * 4 + j`` with ``i`` the column index
+        (x-direction) and ``j`` the row index (y-direction).
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        Coefficient field (background outside every channel, the fixed channel
+        value inside the rotated channel of subdomain ``k``).
+    """
+    N = CHANNEL_ROTATION_CIRCLE_N_SUB
+    side = 1.0 / N
+    width_channel = side / 10.0
+    high_channel = side / 2.0
+
+    parameters = np.asarray(parameters).ravel()
+    if parameters.size != N * N:
+        raise ValueError(
+            f"channel_rotation_circle expects {N * N} parameters (one rotation "
+            f"angle per subdomain); got {parameters.size}."
+        )
+
+    value = np.full(x.shape[1], CHANNEL_ROTATION_CIRCLE_BACKGROUND)
+    for i in range(N):
+        for j in range(N):
+            k = i * N + j
+            theta = parameters[k]
+
+            # Center of the subdomain = center of the channel = center of rotation.
+            center_x = (i + 0.5) * side
+            center_y = (j + 0.5) * side
+
+            # Map the point into the channel's own (axis-aligned) frame.
+            x_translated = x[0] - center_x
+            y_translated = x[1] - center_y
+            cos_theta = np.cos(-theta)
+            sin_theta = np.sin(-theta)
+            x_unrotated = x_translated * cos_theta - y_translated * sin_theta
+            y_unrotated = x_translated * sin_theta + y_translated * cos_theta
+
+            on_channel = np.logical_and(
+                np.abs(x_unrotated) <= width_channel / 2.0,
+                np.abs(y_unrotated) <= high_channel / 2.0,
+            )
+            value = np.where(on_channel, CHANNEL_ROTATION_CIRCLE_VALUE, value)
+    return value
+
+
 # Geometry of the 'channel_long_coeff' family; also used by the sampler in
 # ex_FNO.py to draw admissible parameters.
 CHANNEL_LONG_NUM = 10                                  # number of channels
@@ -774,6 +854,79 @@ def multiscale_sincos(x, parameters, background=0.1):
 
     return background + np.exp(g)
 
+
+def multiscale_sincos_contrast(x, parameters, rel_floor=1e-2):
+    """
+    Multiscale sine-cosine coefficient with an explicit contrast dial.
+
+    Same structure as :func:`multiscale_sincos`, i.e.
+
+        g(x, y) = s * sum_k [ a_k * sin(2*pi*(kx_k*x + ky_k*y))
+                              + b_k * cos(2*pi*(kx_k*x + ky_k*y)) ]
+        A(x, y) = floor + exp(g(x, y)),
+
+    but the amplitudes are rescaled by a single factor ``s`` so that the
+    *guaranteed* dynamic range of the field matches a prescribed target
+    contrast ``C = 10**parameters[0]``.  Since
+    ``|g| <= s * sum_k sqrt(a_k^2 + b_k^2)``, choosing
+
+        s = 0.5 * ln(C) / sum_k sqrt(a_k^2 + b_k^2)
+
+    gives ``exp(g) in [C^(-1/2), C^(1/2)]`` and hence ``A_max/A_min <= C``.
+    The positivity floor is set relative to the lower end,
+    ``floor = rel_floor * C^(-1/2)``, so that coercivity is guaranteed while
+    the floor does not eat the contrast (as the absolute ``background = 0.1``
+    of :func:`multiscale_sincos` does for large amplitudes).
+
+    The realised contrast is somewhat below ``C`` because the sup-bound on
+    ``g`` is attained only when all modes align in phase; empirically
+    ``A_max/A_min ~ C**0.85`` for ``K = 5`` random modes.  The map
+    ``parameters -> A`` stays smooth (analytic away from ``a = b = 0``), which
+    is the property the Grassmann regression needs.
+
+    Parameters
+    ----------
+    x : array-like, shape (2, num_gridpoints)
+        Spatial coordinates; ``x[0]`` are x-coords, ``x[1]`` are y-coords.
+    parameters : array-like, shape (1 + 4 * K,)
+        ``parameters[0]`` is the target contrast on a log10 scale; the
+        remaining entries are the ``(kx, ky, a, b)`` tuples of the ``K``
+        Fourier modes exactly as in :func:`multiscale_sincos`.
+    rel_floor : float, optional
+        Positivity floor relative to ``C**(-1/2)``. Default ``1e-2``.
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        The strictly positive coefficient field evaluated at ``x``.
+    """
+    p = np.asarray(parameters).ravel()
+    if p.size < 5 or (p.size - 1) % 4 != 0:
+        raise ValueError(
+            "multiscale_sincos_contrast expects 1 + 4*K parameters "
+            f"(log10_contrast, then kx, ky, a, b per mode); got {p.size}."
+        )
+
+    log10_contrast = float(p[0])
+    modes = p[1:]
+    K = modes.size // 4
+    kx, ky = modes[0::4], modes[1::4]
+    a, b = modes[2::4], modes[3::4]
+
+    # sup-norm bound of the unscaled g and the rescaling that realises C.
+    amplitude_budget = float(np.sum(np.hypot(a, b)))
+    log_contrast = np.log(10.0) * log10_contrast
+    s = 0.0 if amplitude_budget <= 0.0 else 0.5 * log_contrast / amplitude_budget
+
+    g = np.zeros(x.shape[1])
+    for k in range(K):
+        phase = 2.0 * np.pi * (kx[k] * x[0] + ky[k] * x[1])
+        g = g + s * (a[k] * np.sin(phase) + b[k] * np.cos(phase))
+
+    floor = rel_floor * np.exp(-0.5 * log_contrast)
+    return floor + np.exp(g)
+
+
 # Standalone functions
 def crosspoint_1d(x):
     """
@@ -933,8 +1086,12 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
         # coeff in PDE
         if store_tag == 'channel_coeff':
             coeff_A_function = lambda x : channel(x, parameters)
-        elif store_tag == 'channel_rotated_coeff':
+        elif store_tag in ('channel_rotated_coeff',
+                           'channel_rotated_medium_contrast_coeff',
+                           'channel_rotated_small_contrast_coeff'):
             coeff_A_function = lambda x : channel_rotated(x, parameters)
+        elif store_tag == 'channel_rotation_circle_coeff':
+            coeff_A_function = lambda x : channel_rotation_circle(x, parameters)
         elif store_tag == 'channel_long_coeff':
             coeff_A_function = lambda x : channel_long(x, parameters)
         elif store_tag == 'channel_sub_dom_five_coeff':
@@ -943,13 +1100,15 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
             coeff_A_function = lambda x : np.exp(np.sin(parameters[0]*np.pi*x[0]) + np.sin(parameters[1]*np.pi*x[1]))# highly oszillating
         elif store_tag == 'multiscale_sincos_coeff':
             coeff_A_function = lambda x : multiscale_sincos(x, parameters)
+        elif store_tag == 'multiscale_sincos_hc_coeff':
+            coeff_A_function = lambda x : multiscale_sincos_contrast(x, parameters)
         elif store_tag == 'channel_low_coeff':
             coeff_A_function = lambda x : channel(x, parameters)
         elif (store_tag == 'channel_smooth_coeff') or (store_tag == 'channel_low_smooth_coeff'):
             coeff_A_function = lambda x : 1 + channel_smooth(x, parameters)
         elif store_tag == 'crosspoint_1d_coeff':
             coeff_A_function = lambda x : crosspoint_1d_coeff(x, parameters)
-        elif store_tag == 'random_lines':
+        elif store_tag == 'random_lines_coeff':
             coeff_A_function = lambda x : random_lines(x, parameters)
         elif store_tag == 'bubble_coeff':
             coeff_A_function = lambda x : bubble_coeff(x, parameters)

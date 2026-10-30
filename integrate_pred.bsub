@@ -1,13 +1,13 @@
 #!/bin/bash -l
-#BSUB -J "integrate_pred[1-3]"                           # Job array: one element per store tag
+#BSUB -J "integrate_pred[1-4]"                           # one array element per case; range must equal ${#CASES[@]}
 #BSUB -P BH-000543
 #BSUB -o cluster_jobs_info/integrate_pred.%J.%I.stdout
 #BSUB -e cluster_jobs_info/integrate_pred.%J.%I.stderr
-#BSUB -q inter_a100                                       # Dedicated CPU queue
-#BSUB -W 1:00                                            # Wallclock time
-#BSUB -n 20                                              # CPU cores = number of Ray workers; set >= number of subdomains
+#BSUB -q batch_cpu                                       # Dedicated CPU queue
+#BSUB -W 4:00                                            # samples are solved SEQUENTIALLY (fine solve + uG + uG_pred each)
+#BSUB -n 20                                              # CPU cores = Ray workers; >= nDom (16) keeps every subdomain on its own core
 #BSUB -R "span[hosts=1]"                                 # Ensure cores are on the same host
-#BSUB -R "rusage[mem=1G]"                                # Per-slot RAM
+#BSUB -R "rusage[mem=2G]"                                # Per-slot RAM
 
 # Load modules (CPU only)
 module purge
@@ -19,57 +19,84 @@ mamba activate $vEnv
 # ---------------------------------------------------------------------------
 # User configuration
 # ---------------------------------------------------------------------------
-# One entry per array element; the array range in the -J line above must match
-# the number of entries here.
-STORE_TAGS=(
-    "multiscale_sincos_coeff"
-    "channel_rotated_coeff"
-    "bubble_coeff"
+# Evaluate the FNO-predicted local bases inside the overall MS-GFEM solve, for
+# the prediction bundles written by msgfem.inference_all_subdomains.
+#
+# A bundle is self-describing and uniform, so only the case name varies:
+#   <PRED_ROOT>/<case>/samples_<NSAMPLES>/<SPLIT_LEAF>/
+#       input_parameters.npy         <- --parameters points at this directory
+#       predictions/sub_dom_<id>.npz <- --predictions points here
+# Deriving both from one root keeps them from drifting apart, which matters
+# because compute_overall_errors pairs parameters and predictions BY POSITION
+# and cannot detect a mismatch.
+#
+# The case name doubles as the store_tag: setup.FNO_coeffs has a branch for
+# each of these, so the coefficient rebuilt here is the one the data came from.
+CASES=(
+    "multiscale_sincos_hc_coeff"
+    "channel_rotation_circle_coeff"
+    "channel_rotated_small_contrast_coeff"
+    "channel_rotated_medium_contrast_coeff"
 )
 
-# Directory that holds the predictions (sub_dom_<idx>.npz, key 'pred') of the
-# corresponding store tag.
-PREDICTION_DIRS=(
-    "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/kam8rng_kmario23/predictions/multiscale_sincos_coeff/local_eig_functions_n_5/padding_log10_dpad0p25_intconst/all_subdomains"
-    "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/kam8rng_kmario23/predictions/channel_rotated_coeff/local_eig_functions_n_5/padding_log10_dpad0p25_intconst/all_subdomains"
-   "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/kam8rng_kmario23/predictions/bubble_coeff_10k/local_eig_functions_n_5/padding_log10_dpad0p25/all_subdomains"
-)
+# Must match RUN_TAG of the training/eval run. It tags the prediction bundle
+# read here as well as the errors and plots written below, because none of
+# those paths carry any model identity of their own.
+RUN_TAG="energy_sal_mse_eigval"
 
-# Directory that holds input_parameters.npy of the corresponding store tag.
-PARAMETER_DIRS=(
-    "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/FNO_data/multiscale_sincos_coeff/samples_10000_from_parameter"
-    "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/FNO_data/channel_rotated_coeff/samples_10000_from_parameter"
-   "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/FNO_data/bubble_coeff/samples_10000_from_parameter"
-)
+PRED_ROOT="/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfem_data/FNO_predictions${RUN_TAG:+/${RUN_TAG}}"
+NSAMPLES=100               # size of the evaluated bundle, i.e. its samples_<N> folder
+SPLIT_LEAF="all_samples"   # 'test' / 'test_firstN' when the split was recomputed at eval time
 
 # Number of local eigenfunctions used (must match the prediction tensors).
 NLOC=5
 
+# Samples to integrate. Each one costs a fine reference solve plus two MS-GFEM
+# solves and they run sequentially, so start small and raise once the per-sample
+# runtime is known. Leave empty to use every sample in the bundle.
+MAX_SAMPLES=""
+
 # ---------------------------------------------------------------------------
 IDX=$((LSB_JOBINDEX - 1))
-STORE_TAG="${STORE_TAGS[$IDX]}"
-PREDICTIONS="${PREDICTION_DIRS[$IDX]}"
-PARAMETERS="${PARAMETER_DIRS[$IDX]}"
+if [ "$IDX" -lt 0 ] || [ "$IDX" -ge "${#CASES[@]}" ]; then
+    echo "LSB_JOBINDEX=$LSB_JOBINDEX outside 1..${#CASES[@]}; fix the -J array range" >&2
+    exit 1
+fi
+STORE_TAG="${CASES[$IDX]}"
 
-if [[ -z "$STORE_TAG" || -z "$PREDICTIONS" || -z "$PARAMETERS" ]]; then
-    echo "No configuration for array index $LSB_JOBINDEX" >&2
+BUNDLE="${PRED_ROOT}/${STORE_TAG}/samples_${NSAMPLES}/${SPLIT_LEAF}"
+PARAMETERS="$BUNDLE"
+PREDICTIONS="$BUNDLE/predictions"
+
+if [[ ! -f "$PARAMETERS/input_parameters.npy" ]]; then
+    echo "Missing $PARAMETERS/input_parameters.npy -- run eval_model.bsub first" >&2
+    exit 1
+fi
+if ! ls "$PREDICTIONS"/sub_dom_*.npz >/dev/null 2>&1; then
+    echo "No sub_dom_*.npz under $PREDICTIONS -- run eval_model.bsub first" >&2
     exit 1
 fi
 
 # Output locations. integrate_predictions.py writes the error arrays to --out
-# and always writes the XDMF visualisations to
-# plots/overall_predictions/<STORE_TAG>/.
-OUT="errors/${STORE_TAG}/errors.npz"
-PLOTS="plots/overall_predictions/${STORE_TAG}"
+# and the XDMF visualisations to --plot_root/<STORE_TAG>/.
+OUT="errors${RUN_TAG:+/${RUN_TAG}}/${STORE_TAG}/errors.npz"
+PLOTS="plots/overall_predictions${RUN_TAG:+/${RUN_TAG}}"
+
+MAX_ARG=()
+if [[ -n "$MAX_SAMPLES" ]]; then
+    MAX_ARG=(--max_samples "$MAX_SAMPLES")
+fi
 
 # ---------------------------------------------------------------------------
 echo "Starting CPU-only job on host: $HOSTNAME"
 echo "array index = $LSB_JOBINDEX"
 echo "store_tag   = $STORE_TAG"
+echo "bundle      = $BUNDLE"
 echo "parameters  = $PARAMETERS/input_parameters.npy"
-echo "predictions = $PREDICTIONS/sub_dom_<idx>.npz"
+echo "predictions = $PREDICTIONS/sub_dom_<idx>.npz ($(ls "$PREDICTIONS"/sub_dom_*.npz | wc -l) subdomains)"
+echo "max_samples = ${MAX_SAMPLES:-all}"
 echo "errors ->     $OUT"
-echo "plots ->      $PLOTS"
+echo "plots ->      $PLOTS/$STORE_TAG"
 
 # Run the evaluation
 python integrate_predictions.py \
@@ -77,4 +104,8 @@ python integrate_predictions.py \
     --parameters "$PARAMETERS" \
     --predictions "$PREDICTIONS" \
     --nloc "$NLOC" \
+    "${MAX_ARG[@]}" \
+    --plot_root "$PLOTS" \
     --out "$OUT"
+
+echo "integrate for ${STORE_TAG} finished with exit code $?"

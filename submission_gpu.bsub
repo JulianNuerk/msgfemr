@@ -20,7 +20,7 @@ mamba activate $vEnv
 which python
 
 # Define the array of parameters to loop through
-TAGS=("random_lines" "channel_coeff" "kl_coeff")
+TAGS=("random_lines_coeff" "channel_coeff" "kl_coeff")
 
 # LSF array index ($LSB_JOBINDEX) starts at 1, bash arrays start at 0
 CURRENT_TAG=${TAGS[$LSB_JOBINDEX - 1]}

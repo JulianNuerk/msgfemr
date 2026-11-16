@@ -15,8 +15,8 @@ generated in ex_FNO.py) this module
   subdomains still use the eigsolve,
 * returns the three relative energy errors
   ``err(uG, uh)``, ``err(uG_pred, uh)`` and ``err(uG_pred, uG)``,
-* stores XDMF visualisations of ``uh``, ``uG`` and ``uG_pred`` under
-  ``plots/overall_predictions/<store_tag>/``.
+* stores XDMF visualisations of ``uh``, ``uG`` and ``uG_pred`` for the first
+  ``num_plot_samples`` samples under ``<plot_root>/<store_tag>/``.
 
 Predictions are passed as a ``dict[int, np.ndarray]`` (``predictions_data``)
 mapping a subdomain index to a tensor of shape
@@ -174,6 +174,7 @@ class _GfemPreconditionerWithPredictions(pre.GfemPreconditioner):
             nloc_cutoff[i] = local_data[i][0].shape[1]
         nloc_cutoff = nloc_cutoff.astype(int)
         end = time.time()
+        self.time_local = end - start
         print("Time of local computations: ", end - start)
 
         # Sanity-check partition of unity
@@ -239,13 +240,15 @@ def _compute_uG(V, msh, coeff_A_function, coeff_A, u_D, f,
                 dirichlet_boundary, robin_boundary,
                 deg, Nx, Ny, nx, ny, nDom, ol, os_, nloc, rho, bool_ring,
                 xL, yL, xR, yR, coord_global,
-                predictions_sample=None, base_local_data=None):
+                predictions_sample=None, base_local_data=None, timings=None):
     """Assemble the MS-GFEM problem and evaluate the non-iterative multiscale
     solution using ``pc.apply``.  ``predictions_sample`` is a
     ``dict[int, np.ndarray]`` mapping subdomain index to a
     ``(k, nx_sub+1, ny_sub+1)`` tensor replacing the local eigsolve; passing
     ``base_local_data`` (the per-subdomain result of a previous eigsolve run)
     restricts the recomputation to exactly those predicted subdomains.
+    If ``timings`` is a dict, ``timings["local"]`` is set to the wall-clock
+    time of the local eigenproblem stage.
 
     Returns ``(uG, local_data)``.
     """
@@ -282,7 +285,14 @@ def _compute_uG(V, msh, coeff_A_function, coeff_A, u_D, f,
     pc.apply(b_tmp, uG_vec)
     uG.vector.array[:] = uG_vec.array
 
+    if timings is not None:
+        timings["local"] = gfem_pre.time_local
+
     return uG, gfem_pre.local_data
+
+
+# Scratch, not home: ~1.4 GB per case and run filled the home quota.
+DEFAULT_PLOT_ROOT = "/fs/scratch/rb_bd_dlp_rng_dl01_cr_MSO_employees/students/nuj7rng/msgfemr_plots"
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +301,7 @@ def _compute_uG(V, msh, coeff_A_function, coeff_A, u_D, f,
 def compute_overall_errors(store_tag, parameters, predictions_data,
                            deg=1, Ny=4, ny=2 ** 8, ol=2, os_=2, nloc=5,
                            rho=0.0, bool_ring=False,
-                           plot_root="plots/overall_predictions"):
+                           plot_root=DEFAULT_PLOT_ROOT, num_plot_samples=3):
     """Evaluate the effect of network-predicted local bases on the overall
     MS-GFEM solution for every sample in ``parameters``.
 
@@ -316,6 +326,8 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
     plot_root : str, optional
         Base directory for the XDMF visualisations of ``uh``, ``uG`` and
         ``uG_pred``, which are always written to ``plot_root/<store_tag>/``.
+    num_plot_samples : int, optional
+        Only the first ``num_plot_samples`` samples are plotted.
 
     Returns
     -------
@@ -452,6 +464,9 @@ def compute_overall_errors(store_tag, parameters, predictions_data,
             flush=True,
         )
 
+        if sample_idx >= num_plot_samples:
+            continue
+
         _plot_to_path(uh,      msh, os.path.join(plot_dir, f"uh_sample_{sample_idx}"))
         _plot_to_path(uG,      msh, os.path.join(plot_dir, f"uG_sample_{sample_idx}"))
         _plot_to_path(uG_pred, msh, os.path.join(plot_dir, f"uG_pred_sample_{sample_idx}"))
@@ -521,9 +536,11 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=str, default=None,
                         help="Where to store the resulting error arrays. "
                              "Defaults to 'errors/<store_tag>/errors.npz'.")
-    parser.add_argument("--plot_root", type=str, default="plots/overall_predictions",
+    parser.add_argument("--plot_root", type=str, default=DEFAULT_PLOT_ROOT,
                         help="Root for the XDMF visualisations. Separate it per "
                              "model, otherwise a second run overwrites the first.")
+    parser.add_argument("--num_plot_samples", type=int, default=3,
+                        help="Only the first N samples are plotted.")
     args = parser.parse_args()
 
     if args.out is None:
@@ -548,6 +565,7 @@ if __name__ == "__main__":
         predictions_data=predictions_data,
         nloc=args.nloc,
         plot_root=args.plot_root,
+        num_plot_samples=args.num_plot_samples,
     )
 
     out_parent = os.path.dirname(args.out)

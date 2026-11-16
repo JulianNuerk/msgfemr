@@ -6,7 +6,6 @@ It includes utilities for homogeneous Dirichlet and Robin boundaries, as well as
 
 import numpy as np
 from dolfinx.fem import Function
-from KL_expansion import kl_expansion
 
 
 def getSetupSourceDirichlet(xL, yL, xR, yR, V, msh):
@@ -927,6 +926,179 @@ def multiscale_sincos_contrast(x, parameters, rel_floor=1e-2):
     return floor + np.exp(g)
 
 
+def matern_kl_eigenpairs(L, nu=1.0, ell=0.1, sigma2=1.0):
+    r"""
+    Leading ``L`` Karhunen--Lo\`eve eigenpairs of a Whittle--Mat\'ern field on
+    :math:`D = [0, 1]^2`.
+
+    The Gaussian field :math:`g` is the solution of the SPDE (Lindgren, Rue,
+    Lindstr\"om 2011)
+
+    .. math::
+
+        (\kappa^2 - \Delta)^{\alpha/2} g = \eta\, \mathcal{W}
+        \quad \text{in } D, \qquad
+        \partial_n g = 0 \quad \text{on } \partial D,
+
+    with white noise :math:`\mathcal{W}`, smoothness :math:`\nu > 0`,
+    :math:`\alpha = \nu + d/2 = \nu + 1`, inverse correlation length
+    :math:`\kappa = \sqrt{2\nu}/\ell` and
+
+    .. math::
+
+        \eta^2 = \sigma^2 \frac{(4\pi)^{d/2}\, \Gamma(\alpha)\, \kappa^{2\nu}}{\Gamma(\nu)}
+               = 4\pi \nu\, \sigma^2 \kappa^{2\nu},
+
+    so that on :math:`\mathbb{R}^2` the field has exactly the Mat\'ern covariance
+
+    .. math::
+
+        C(r) = \sigma^2 \frac{2^{1-\nu}}{\Gamma(\nu)}
+               \Big(\frac{\sqrt{2\nu}\, r}{\ell}\Big)^{\nu}
+               K_\nu\Big(\frac{\sqrt{2\nu}\, r}{\ell}\Big).
+
+    On :math:`D` the Neumann condition only perturbs the covariance near
+    :math:`\partial D`. The covariance operator
+    :math:`\mathcal{C} = \eta^2 (\kappa^2 - \Delta)^{-\alpha}` shares the
+    eigenfunctions of the Neumann Laplacian, hence the KL eigenpairs are
+    known in closed form for :math:`\mathbf{k} = (k_1, k_2) \in \mathbb{N}_0^2`:
+
+    .. math::
+
+        e_{\mathbf{k}}(x) = c_{k_1} c_{k_2} \cos(\pi k_1 x_1) \cos(\pi k_2 x_2),
+        \qquad c_0 = 1,\; c_{k} = \sqrt{2} \;(k \ge 1),
+
+    .. math::
+
+        \lambda_{\mathbf{k}} = \eta^2 \big(\kappa^2 + \pi^2 |\mathbf{k}|^2\big)^{-\alpha}.
+
+    The :math:`e_{\mathbf{k}}` are :math:`L^2(D)`-orthonormal, and
+    :math:`\sum_{\mathbf{k}} \lambda_{\mathbf{k}}`, the domain-averaged
+    variance, equals :math:`\sigma^2` up to lattice and boundary effects.
+
+    Parameters
+    ----------
+    L : int
+        Number of modes kept.
+    nu : float, optional
+        Mat\'ern smoothness :math:`\nu`; realisations are
+        :math:`C^{\lceil \nu \rceil - 1}`. Default ``1.0``.
+    ell : float, optional
+        Correlation length :math:`\ell`. Default ``0.1``.
+    sigma2 : float, optional
+        Marginal variance :math:`\sigma^2`. Default ``1.0``.
+
+    Returns
+    -------
+    k : np.ndarray, shape (L, 2)
+        Wave numbers :math:`\mathbf{k}`, sorted by decreasing
+        :math:`\lambda_{\mathbf{k}}` (ties broken by :math:`k_1`, then :math:`k_2`).
+    lam : np.ndarray, shape (L,)
+        Eigenvalues :math:`\lambda_{\mathbf{k}}`.
+    """
+    kappa2 = 2.0 * nu / ell**2
+    alpha = nu + 1.0
+    eta2 = 4.0 * np.pi * nu * sigma2 * kappa2**nu
+
+    # The quarter disc of radius 2 sqrt(L) holds more than L lattice points.
+    K = int(np.ceil(2.0 * np.sqrt(L))) + 1
+    k1, k2 = np.meshgrid(np.arange(K), np.arange(K), indexing="ij")
+    k1, k2 = k1.ravel(), k2.ravel()
+    r2 = k1**2 + k2**2
+    order = np.lexsort((k2, k1, r2))[:L]
+
+    k = np.stack([k1[order], k2[order]], axis=1)
+    lam = eta2 * (kappa2 + np.pi**2 * r2[order]) ** (-alpha)
+    return k, lam
+
+
+def kl_expansion(x, xi, nu=1.0, ell=0.1, sigma2=1.0):
+    r"""
+    Truncated Karhunen--Lo\`eve expansion of a Whittle--Mat\'ern Gaussian field
+    on :math:`D = [0, 1]^2`,
+
+    .. math::
+
+        g_L(x, \xi) = \sum_{l=1}^{L} \sqrt{\lambda_{\mathbf{k}_l}}\, \xi_l\,
+                      e_{\mathbf{k}_l}(x),
+        \qquad \xi_l \overset{\text{iid}}{\sim} \mathcal{N}(0, 1),
+
+    with the analytic eigenpairs :math:`(\lambda_{\mathbf{k}_l}, e_{\mathbf{k}_l})`
+    of :func:`matern_kl_eigenpairs`. The truncation :math:`L` is the length
+    of ``xi``.
+
+    Parameters
+    ----------
+    x : array-like, shape (2, num_gridpoints) or (3, num_gridpoints)
+        Spatial coordinates; only ``x[0]`` and ``x[1]`` are used.
+    xi : array-like, shape (L,)
+        KL coefficients :math:`\xi_l`.
+    nu, ell, sigma2 : float, optional
+        Mat\'ern smoothness, correlation length and variance, see
+        :func:`matern_kl_eigenpairs`.
+
+    Returns
+    -------
+    g : np.ndarray, shape (num_gridpoints,)
+        :math:`g_L(x, \xi)` evaluated at ``x``.
+    """
+    xi = np.asarray(xi, dtype=float).ravel()
+    k, lam = matern_kl_eigenpairs(xi.size, nu=nu, ell=ell, sigma2=sigma2)
+
+    # Separable 1D factors c_m cos(pi m x_j), shape (K, num_gridpoints).
+    m = np.arange(int(k.max()) + 1)[:, None]
+    c = np.where(m == 0, 1.0, np.sqrt(2.0))
+    cos_x = c * np.cos(np.pi * m * x[0])
+    cos_y = c * np.cos(np.pi * m * x[1])
+
+    g = np.zeros(x.shape[1])
+    for (k1, k2), w in zip(k, np.sqrt(lam) * xi):
+        g += w * cos_x[k1] * cos_y[k2]
+    return g
+
+
+def lognormal_matern(x, parameters, nu=0.5, ell=0.1, sigma2=2.0):
+    r"""
+    Log-normal random coefficient with Whittle--Mat\'ern log-covariance,
+
+    .. math::
+
+        A_\xi(x) = \exp\big(g_L(x, \xi)\big),
+
+    with :math:`g_L` the truncated KL expansion of :func:`kl_expansion`. The
+    field is strictly positive for every :math:`\xi`, has no scale separation
+    and its contrast is controlled by :math:`\sigma^2`: pointwise
+    :math:`\log A_\xi(x) \sim \mathcal{N}(0, \approx\sigma^2)`. Since
+    :math:`g_L` is linear in :math:`\sigma`, the contrast is
+    :math:`\max A_\xi / \min A_\xi = e^{\sigma R_\xi}` with
+    :math:`R_\xi = \max_x g_L - \min_x g_L` evaluated at :math:`\sigma = 1`.
+    For :math:`\nu = 1`, :math:`\ell = 0.1`, :math:`L = 100` and
+    :math:`2 \cdot 10^4` samples, :math:`R_\xi` has median :math:`6.1` and
+    maximum :math:`11.4`, so the default :math:`\sigma^2 = 1` gives a median
+    contrast of about :math:`4.5 \cdot 10^2`, a 99th percentile of about
+    :math:`8.8 \cdot 10^3` and a maximum of about :math:`8.8 \cdot 10^4`
+    (:math:`0.8\,\%` of the samples exceed :math:`10^4`). A Gaussian field
+    admits no hard bound; :math:`\sigma^2 \le (\ln 10^4 / 11.4)^2 \approx 0.65`
+    keeps all observed samples below :math:`10^4`.
+
+    Parameters
+    ----------
+    x : array-like, shape (2, num_gridpoints) or (3, num_gridpoints)
+        Spatial coordinates; only ``x[0]`` and ``x[1]`` are used.
+    parameters : array-like, shape (L,)
+        KL coefficients :math:`\xi_l \sim \mathcal{N}(0, 1)`.
+    nu, ell, sigma2 : float, optional
+        Mat\'ern smoothness, correlation length and variance, see
+        :func:`matern_kl_eigenpairs`.
+
+    Returns
+    -------
+    z : np.ndarray, shape (num_gridpoints,)
+        The strictly positive coefficient field evaluated at ``x``.
+    """
+    return np.exp(kl_expansion(x, parameters, nu=nu, ell=ell, sigma2=sigma2))
+
+
 # Standalone functions
 def crosspoint_1d(x):
     """
@@ -1058,6 +1230,155 @@ def bubble_coeff(x, p):
     return z
 
 
+def sample_FNO_parameters(store_tag, num_samples):
+    """Draw ``num_samples`` parameter rows for the coefficient ``store_tag`` of
+    :func:`FNO_coeffs` from the global ``np.random`` state (seed it beforehand).
+    """
+    x0 = 0.234375  # lower right corner of subdomain
+    y1 = 0.515625  # upper left corner
+    eps = 1e-08
+
+    if store_tag == 'channel_coeff':
+        # One channel of size (side/10, side/2) strictly inside each of the 4x4
+        # subdomains; per subdomain (channel_x_offset, channel_y_offset, height).
+        N_sub = 4
+        side = 1.0 / N_sub
+        width_channel = side / 10.0
+        high_channel = side / 2.0
+        p0_bound = side - width_channel - eps
+        p1_bound = side - high_channel - eps
+        low = np.tile([eps, eps, 1.0], N_sub * N_sub)
+        high = np.tile([p0_bound, p1_bound, 1e+03], N_sub * N_sub)
+        return np.random.uniform(low=low, high=high, size=(num_samples, 3 * N_sub * N_sub))
+    if store_tag == 'channel_rotated_coeff':
+        # As 'channel_coeff' plus a rotation angle in [0, 2*pi] per channel.
+        N_sub = 4
+        side = 1.0 / N_sub
+        width_channel = side / 10.0
+        high_channel = side / 2.0
+        p0_bound = side - width_channel - eps
+        p1_bound = side - high_channel - eps
+        low = np.tile([eps, eps, 1.0, 0.0], N_sub * N_sub)
+        high = np.tile([p0_bound, p1_bound, 1e+03, 2 * np.pi], N_sub * N_sub)
+        return np.random.uniform(low=low, high=high, size=(num_samples, 4 * N_sub * N_sub))
+    if store_tag in ('channel_rotated_medium_contrast_coeff',
+                     'channel_rotated_small_contrast_coeff'):
+        # As 'channel_rotated_coeff' with the height capped at 1e2 (medium) resp. 1e1 (small).
+        N_sub = 4
+        side = 1.0 / N_sub
+        width_channel = side / 10.0
+        high_channel = side / 2.0
+        p0_bound = side - width_channel - eps
+        p1_bound = side - high_channel - eps
+        max_height = 1e+02 if store_tag == 'channel_rotated_medium_contrast_coeff' else 1e+01
+        low = np.tile([eps, eps, 1.0, 0.0], N_sub * N_sub)
+        high = np.tile([p0_bound, p1_bound, max_height, 2 * np.pi], N_sub * N_sub)
+        return np.random.uniform(low=low, high=high, size=(num_samples, 4 * N_sub * N_sub))
+    if store_tag == 'channel_rotation_circle_coeff':
+        # Centered channel with fixed contrast; only the angle is random.
+        N_sub = 4
+        return np.random.uniform(low=0.0, high=2 * np.pi, size=(num_samples, N_sub * N_sub))
+    if store_tag == 'channel_long_coeff':
+        # One long, nearly horizontal channel per horizontal band; per channel
+        # (center_x, center_y, height, angle). Constants mirror channel_long.
+        n_channels = 10
+        length_channel = 0.9
+        thickness_channel = 1.0 / (5 * n_channels)
+        max_angle = np.pi / 36.0
+        band = 1.0 / n_channels
+        cx_jitter = (1.0 - length_channel) / 2.0
+        cy_jitter = band / 2.0 - thickness_channel
+
+        band_centers = (np.arange(n_channels) + 0.5) * band
+        cx = 0.5 + np.random.uniform(-cx_jitter, cx_jitter, size=(num_samples, n_channels))
+        cy = band_centers + np.random.uniform(-cy_jitter, cy_jitter, size=(num_samples, n_channels))
+        heights = np.random.uniform(1.0, 1e+03, size=(num_samples, n_channels))
+        angles = np.random.uniform(-max_angle, max_angle, size=(num_samples, n_channels))
+        return np.stack([cx, cy, heights, angles], axis=2).reshape(num_samples, 4 * n_channels)
+    if store_tag == 'sinus_coeff':
+        return np.random.uniform(low=[5, 10], high=[10, 20], size=(num_samples, 2))
+    if store_tag == 'multiscale_sincos_coeff':
+        # K Fourier modes with integer frequencies and amplitudes decaying with frequency.
+        K = 5
+        k_min, k_max = 1, 16
+        kx = np.random.randint(k_min, k_max + 1, size=(num_samples, K)).astype(float)
+        ky = np.random.randint(k_min, k_max + 1, size=(num_samples, K)).astype(float)
+        scale = 1.0 / np.sqrt(kx ** 2 + ky ** 2)
+        a = np.random.uniform(-1.0, 1.0, size=(num_samples, K)) * scale
+        b = np.random.uniform(-1.0, 1.0, size=(num_samples, K)) * scale
+        return np.stack([kx, ky, a, b], axis=2).reshape(num_samples, 4 * K)
+    if store_tag == 'multiscale_sincos_hc_coeff':
+        # As 'multiscale_sincos_coeff'; column 0 is log10 of the target contrast.
+        K = 5
+        k_min, k_max = 1, 16
+        log10_contrast_min, log10_contrast_max = 1.0, 4.0
+        kx = np.random.randint(k_min, k_max + 1, size=(num_samples, K)).astype(float)
+        ky = np.random.randint(k_min, k_max + 1, size=(num_samples, K)).astype(float)
+        scale = 1.0 / np.sqrt(kx ** 2 + ky ** 2)
+        a = np.random.uniform(-1.0, 1.0, size=(num_samples, K)) * scale
+        b = np.random.uniform(-1.0, 1.0, size=(num_samples, K)) * scale
+        log10_contrast = np.random.uniform(log10_contrast_min, log10_contrast_max, size=(num_samples, 1))
+        modes = np.stack([kx, ky, a, b], axis=2).reshape(num_samples, 4 * K)
+        return np.concatenate([log10_contrast, modes], axis=1)
+    if store_tag == 'channel_low_coeff':
+        # As 'channel_coeff' with a much lower height range.
+        N_sub = 4
+        side = 1.0 / N_sub
+        width_channel = side / 10.0
+        high_channel = side / 2.0
+        p0_bound = side - width_channel - eps
+        p1_bound = side - high_channel - eps
+        low = np.tile([eps, eps, 1.0], N_sub * N_sub)
+        high = np.tile([p0_bound, p1_bound, 10.0], N_sub * N_sub)
+        return np.random.uniform(low=low, high=high, size=(num_samples, 3 * N_sub * N_sub))
+    if store_tag in ('channel_smooth_coeff', 'channel_low_smooth_coeff'):
+        eps = 1e-04
+        wx, wy = 2 * [np.abs(y1 - x0) / 5]
+        max_height = 100 if store_tag == 'channel_smooth_coeff' else 10
+        return np.random.uniform(low=[x0 + eps + wx / 2, x0 + eps + wy / 2, 1],
+                                 high=[y1 - eps - wx / 2, y1 - eps - wy / 2, max_height],
+                                 size=(num_samples, 3))
+    if store_tag == 'crosspoint_1d_coeff':
+        contrast = 10000
+        parameters = contrast * np.ones((num_samples, 2))
+        parameters[:, 0] = np.linspace(0, 1, num_samples)
+        return parameters
+    if store_tag == 'random_lines_coeff':
+        num_lines = 10
+        centers = np.random.uniform(0.1, 0.9, (num_samples, num_lines, 2))
+        lengths = np.random.uniform(0.05, 0.4, (num_samples, num_lines, 1))
+        angles = np.random.uniform(0, np.pi, (num_samples, num_lines, 1))
+        return np.concatenate([centers, lengths, angles], axis=2).reshape(num_samples, num_lines * 4)
+    if store_tag == 'bubble_coeff':
+        # One bubble per 4x4 subdomain; per subdomain (cx_local, cy_local, radius, height).
+        N_sub = 4
+        side = 1.0 / N_sub
+        r_min = side / 50.0
+        r_max = side / 4.0
+        h_min = 1.0
+        h_max = 1_000.0
+
+        parameters = np.zeros((num_samples, 4 * N_sub * N_sub))
+        for s in range(num_samples):
+            for b in range(N_sub * N_sub):
+                r = np.random.uniform(r_min, r_max)
+                cx_local = np.random.uniform(r + eps, side - r - eps)
+                cy_local = np.random.uniform(r + eps, side - r - eps)
+                h = np.random.uniform(h_min, h_max)
+                parameters[s, 4 * b: 4 * (b + 1)] = [cx_local, cy_local, r, h]
+        return parameters
+    if store_tag == 'rotated_channel_coeff':
+        p0_bound = 9 / 10 * (y1 - x0) - eps
+        p1_bound = 1 / 2 * (y1 - x0) - eps
+        angles = np.random.uniform(0, np.pi, (num_samples, 1))
+        cy_coords = np.random.uniform(low=[eps, eps], high=[p0_bound, p1_bound], size=(num_samples, 2))
+        return np.concatenate([cy_coords, angles], axis=1)
+    if store_tag == 'kl_coeff':
+        L = 400
+        return np.random.normal(size=(num_samples, L))
+    raise ValueError('store_tag %s not defined!' % (store_tag))
+
+
 def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
         
         def robin_boundary(x):
@@ -1115,9 +1436,7 @@ def FNO_coeffs(xL, yL, xR, yR, V, msh, parameters, store_tag):
         elif store_tag == 'rotated_channel_coeff':
             coeff_A_function = lambda x : 1 + rotated_channel_sub_dom_five(x, parameters)
         elif store_tag == 'kl_coeff':
-            eigenvalues = np.load('kl_data/eigenvalues.npy')
-            eigenfunctions = np.load('kl_data/eigenfunctions.npy')
-            coeff_A_function = lambda x : kl_expansion(x, parameters, eigenvalues, eigenfunctions)
+            coeff_A_function = lambda x : lognormal_matern(x, parameters)
         else:
             raise ValueError('Coefficient function for %s not defined, please implement here...!'%(store_tag))
         

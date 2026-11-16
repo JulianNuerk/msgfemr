@@ -1,0 +1,71 @@
+#!/bin/bash -l
+#BSUB -J "gmsfem[1-4]"                                   # one array element per case; range must equal ${#CASES[@]}
+#BSUB -P BH-000543
+#BSUB -o cluster_jobs_info/gmsfem.%J.%I.stdout
+#BSUB -e cluster_jobs_info/gmsfem.%J.%I.stderr
+#BSUB -q inter_a100                                      # CPU-only work, no GPU requested
+#BSUB -W 3:00
+#BSUB -n 26                                              # Ray workers; >= N_v = (Ny+1)^2 = 25 local domains
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=2G]"
+
+# Submit from the msgfemr root: bsub < GMsFEM/gmsfem.bsub
+
+module purge
+vEnv=msgfemr
+mamba activate $vEnv
+
+# ---------------------------------------------------------------------------
+# User configuration
+# ---------------------------------------------------------------------------
+# Coefficients, i.e. store_tags of setup.FNO_coeffs; parameters are sampled in the script.
+CASES=(
+    "bubble_coeff"
+    "channel_rotated_coeff"
+    "channel_rotated_medium_contrast_coeff"
+    "multiscale_sincos_hc_coeff"
+)
+NSAMPLES=100
+SEED=0
+
+# Local basis functions per local domain, used for both GMsFEM (n_bf) and MS-GFEM (nloc).
+NLOC_LIST=(5 10 15 20 25 30)
+
+# ---------------------------------------------------------------------------
+IDX=$((LSB_JOBINDEX - 1))
+if [ "$IDX" -lt 0 ] || [ "$IDX" -ge "${#CASES[@]}" ]; then
+    echo "LSB_JOBINDEX=$LSB_JOBINDEX outside 1..${#CASES[@]}; fix the -J array range" >&2
+    exit 1
+fi
+STORE_TAG="${CASES[$IDX]}"
+
+echo "Starting CPU-only job on host: $HOSTNAME"
+echo "store_tag  = $STORE_TAG"
+echo "samples    = $NSAMPLES (seed $SEED)"
+echo "nloc list  = ${NLOC_LIST[*]}"
+
+RUN_DIR="errors/gmsfem/nloc_$(IFS=_; echo "${NLOC_LIST[*]}")"
+
+STATUS=0
+for NLOC in "${NLOC_LIST[@]}"; do
+    OUT="${RUN_DIR}/${STORE_TAG}/nloc_${NLOC}.npz"
+    echo "=== nloc = n_bf = $NLOC -> $OUT"
+
+    python -m GMsFEM.ex_gmsfem \
+        --problem "$STORE_TAG" \
+        --num_samples "$NSAMPLES" \
+        --seed "$SEED" \
+        --n_bf "$NLOC" \
+        --compare_msgfem \
+        --nloc "$NLOC" \
+        --out "$OUT"
+    RC=$?
+    echo "nloc = $NLOC finished with exit code $RC"
+    [ "$RC" -ne 0 ] && STATUS=$RC
+done
+
+# Array elements finish independently; the last one to finish plots all cases.
+python -m GMsFEM.plot_gmsfem_errors --run_dir "$RUN_DIR"
+
+echo "GMsFEM for ${STORE_TAG} finished with exit code $STATUS"
+exit $STATUS
